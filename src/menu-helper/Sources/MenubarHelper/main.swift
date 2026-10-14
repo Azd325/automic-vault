@@ -4094,8 +4094,7 @@ private final class ApprovalServer: @unchecked Sendable {
 
         switch op {
         case .openWindow where isTrustedMenuHelperCaller(path: callerPath, signing: signing):
-            DispatchQueue.main.async { self.onOpenWindow() }
-            reply(peer, to: message, ok: true, error: nil)
+            replyAfterOpeningWindow(message, on: peer, openWindow: onOpenWindow)
         case .uvHelperVersion where isTrustedAvCaller(path: callerPath, signing: signing):
             let supported = xpc_dictionary_get_uint64(message, "requested_version") == 1
                 && av_original_parent_tracking_available()
@@ -11904,8 +11903,9 @@ private func handOffToLaunchAgentIfNeeded() throws -> Bool {
         if requestExistingInstanceToOpenWindow() {
             return true
         }
-        // A pre-open-window release may still be running. Restart it once so
-        // the pending request is consumed by the current release.
+        // Recover an unresponsive instance or a release without open-window support.
+        // The original instance may have consumed the pending flag before stalling.
+        UserDefaults.standard.set(true, forKey: pendingMainWindowKey)
         do {
             try runLaunchctl(["kickstart", "-k", service])
             return true
@@ -11926,20 +11926,55 @@ private func handOffToLaunchAgentIfNeeded() throws -> Bool {
     return true
 }
 
+private func replyAfterOpeningWindow(
+    _ message: xpc_object_t, on peer: xpc_connection_t,
+    openWindow: @escaping @MainActor () -> Void
+) {
+    DispatchQueue.main.async {
+        openWindow()
+        let response = xpc_dictionary_create_reply(message) ?? xpc_dictionary_create_empty()
+        xpc_dictionary_set_bool(response, "ok", true)
+        xpc_connection_send_message(peer, response)
+    }
+}
+
 private func requestExistingInstanceToOpenWindow() -> Bool {
     let connection = approvalServiceName.withCString {
         xpc_connection_create_mach_service($0, nil, 0)
     }
-    xpc_connection_set_event_handler(connection) { _ in }
+    return requestExistingInstanceToOpenWindow(connection: connection)
+}
+
+// Only the startup handoff waits synchronously; replies must not use the main queue.
+private func requestExistingInstanceToOpenWindow(
+    connection: xpc_connection_t, timeout: TimeInterval = 5
+) -> Bool {
+    let completed = DispatchSemaphore(value: 0)
+    let result = OSAllocatedUnfairLock(initialState: Optional<Bool>.none)
+    let finish: @Sendable (Bool) -> Void = { success in
+        let first = result.withLock { value in
+            guard value == nil else { return false }
+            value = success
+            return true
+        }
+        if first { completed.signal() }
+    }
+    let deadline = DispatchTime.now() + timeout
+    xpc_connection_set_target_queue(connection, DispatchQueue.global(qos: .userInitiated))
+    xpc_connection_set_event_handler(connection) { event in
+        if xpc_get_type(event) == XPC_TYPE_ERROR { finish(false) }
+    }
     xpc_connection_activate(connection)
+    defer { xpc_connection_cancel(connection) }
     let message = xpc_dictionary_create_empty()
     ApprovalServiceOperation.openWindow.rawValue.withCString {
         xpc_dictionary_set_string(message, "op", $0)
     }
-    let reply = xpc_connection_send_message_with_reply_sync(connection, message)
-    xpc_connection_cancel(connection)
-    return xpc_get_type(reply) == XPC_TYPE_DICTIONARY
-        && xpc_dictionary_get_bool(reply, "ok")
+    xpc_connection_send_message_with_reply(connection, message, DispatchQueue.global(qos: .userInitiated)) { reply in
+        finish(xpc_get_type(reply) == XPC_TYPE_DICTIONARY && xpc_dictionary_get_bool(reply, "ok"))
+    }
+    guard completed.wait(timeout: deadline) == .success else { return false }
+    return result.withLock { $0 == true }
 }
 
 private func launchAgentConfigurationsMatch(_ lhsData: Data?, _ rhsData: Data) -> Bool {
@@ -19522,7 +19557,68 @@ private func runRetainedProcessProvenanceSelfCheck() -> Int32 {
     return 0
 }
 
+@MainActor
+private func openWindowHandoffSelfCheck() -> Bool {
+    let opened = OSAllocatedUnfairLock(initialState: 0)
+    let listener = xpc_connection_create(nil, DispatchQueue.global(qos: .userInitiated))
+    let mode = OSAllocatedUnfairLock(initialState: "open")
+    xpc_connection_set_event_handler(listener) { event in
+        guard xpc_get_type(event) == XPC_TYPE_CONNECTION else { return }
+        let peer = event
+        xpc_connection_set_event_handler(peer) { message in
+            guard xpc_get_type(message) == XPC_TYPE_DICTIONARY else { return }
+            switch mode.withLock({ $0 }) {
+            case "open":
+                replyAfterOpeningWindow(message, on: peer) { opened.withLock { $0 += 1 } }
+            case "disconnect": xpc_connection_cancel(peer)
+            case "deny":
+                let response = xpc_dictionary_create_reply(message)!
+                xpc_dictionary_set_bool(response, "ok", false)
+                xpc_connection_send_message(peer, response)
+            default: break // Keep the connection alive without replying.
+            }
+        }
+        xpc_connection_activate(peer)
+    }
+    xpc_connection_activate(listener)
+    defer { xpc_connection_cancel(listener) }
+    let endpoint = xpc_endpoint_create(listener)
+
+    // A responsive main queue opens the window before acknowledging the handoff.
+    let result = OSAllocatedUnfairLock(initialState: Optional<Bool>.none)
+    DispatchQueue.global().async {
+        let success = requestExistingInstanceToOpenWindow(
+            connection: xpc_connection_create_from_endpoint(endpoint), timeout: 2)
+        result.withLock { $0 = success }
+    }
+    let deadline = Date().addingTimeInterval(3)
+    while result.withLock({ $0 == nil }), Date() < deadline {
+        RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+    }
+    guard result.withLock({ $0 == true }), opened.withLock({ $0 == 1 }) else { return false }
+
+    // Deliberately do not service the main queue: XPC reception alone must not ACK.
+    let start = Date()
+    guard !requestExistingInstanceToOpenWindow(
+        connection: xpc_connection_create_from_endpoint(endpoint), timeout: 0.1),
+        Date().timeIntervalSince(start) < 1,
+        opened.withLock({ $0 == 1 }) else { return false }
+    // Drain the late action/reply after the timed-out caller has canceled its connection.
+    RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+    guard opened.withLock({ $0 == 2 }) else { return false }
+    for behavior in ["silent", "disconnect", "deny"] {
+        mode.withLock { $0 = behavior }
+        let start = Date()
+        guard !requestExistingInstanceToOpenWindow(
+            connection: xpc_connection_create_from_endpoint(endpoint), timeout: 0.1),
+            Date().timeIntervalSince(start) < 1 else { return false }
+    }
+    return true
+}
+
+@MainActor
 private func runLaunchAgentHandoffSelfCheck() -> Int32 {
+    guard openWindowHandoffSelfCheck() else { return 1 }
     let template = try! PropertyListSerialization.data(
         fromPropertyList: [
             "Label": approvalLaunchAgentName,
