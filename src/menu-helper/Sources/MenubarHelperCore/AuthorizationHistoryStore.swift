@@ -362,6 +362,17 @@ public final class AuthorizationHistoryStore: @unchecked Sendable {
     }
 
     func dashboard(previous: AuthorizationHistoryDashboard?, afterBatch: () throws -> Void) throws -> AuthorizationHistoryDashboard {
+        do {
+            return try scanDashboard(previous: previous, afterBatch: afterBatch)
+        } catch AuthorizationHistoryStoreError.verificationFailed {
+            // Startup cleanup can invalidate a scan; wait for it and authenticate a fresh snapshot once.
+            return try maintenanceLock.withLock {
+                try scanDashboard(previous: nil, afterBatch: {})
+            }
+        }
+    }
+
+    private func scanDashboard(previous: AuthorizationHistoryDashboard?, afterBatch: () throws -> Void) throws -> AuthorizationHistoryDashboard {
         let calendar = Calendar.current
         let (revision, dataVersion, upperSequence, maximumAge) = try lock.withLock {
             let version = try dashboardDataVersion()

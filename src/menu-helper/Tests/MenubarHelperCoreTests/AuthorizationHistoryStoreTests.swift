@@ -664,7 +664,7 @@ func authorizationHistoryDashboardRejectsCorruptionOnExplicitRefreshAndDisclosur
 }
 
 @Test
-func authorizationHistoryDashboardInvalidatesAfterImportAndDuringMaintenance() throws {
+func authorizationHistoryDashboardRefreshesAfterImportAndOverlappingMaintenance() throws {
     let fixture = try HistoryStoreFixture()
     defer { fixture.remove() }
     let original = fixture.record(index: 1)
@@ -675,8 +675,26 @@ func authorizationHistoryDashboardInvalidatesAfterImportAndDuringMaintenance() t
     #expect(try fixture.store.dashboard(previous: snapshot).page.records == [replacement, original])
     for index in 3..<8 { try #require(fixture.store.append(fixture.record(index: index))) }
     try fixture.store.setMaximumEncryptedBytes(1_800)
-    #expect(throws: AuthorizationHistoryStoreError.verificationFailed) {
-        try fixture.store.dashboard(previous: nil, afterBatch: { try fixture.store.maintain() })
+    let refreshed = try fixture.store.dashboard(previous: nil, afterBatch: { try fixture.store.maintain() })
+    #expect(refreshed.page.records == (try fixture.store.records()))
+    #expect(refreshed.page.records.count < 8)
+}
+
+@Test
+func authorizationHistoryDashboardRetryStillRejectsCorruption() throws {
+    let fixture = try HistoryStoreFixture()
+    defer { fixture.remove() }
+    for index in 0..<8 { try #require(fixture.store.append(fixture.record(index: index))) }
+    try fixture.store.setMaximumEncryptedBytes(1_800)
+    var database: OpaquePointer?
+    try #require(sqlite3_open(fixture.url.path, &database) == SQLITE_OK)
+    defer { sqlite3_close(database) }
+    #expect(throws: AuthorizationHistoryStoreError.decoding) {
+        try fixture.store.dashboard(previous: nil, afterBatch: {
+            try fixture.store.maintain()
+            try #require(sqlite3_exec(database,
+                "UPDATE authorization_history SET ciphertext = zeroblob(32)", nil, nil, nil) == SQLITE_OK)
+        })
     }
 }
 
