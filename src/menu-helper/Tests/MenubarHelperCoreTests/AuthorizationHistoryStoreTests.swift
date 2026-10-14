@@ -737,6 +737,89 @@ func authorizationHistoryDashboardReadsOnlyNewRowsOnIncrementalRefresh() throws 
     print("History dashboard benchmark, 1000 records: old dual scan=\(oldSeconds)s, incremental=\(deltaSeconds)s")
 }
 
+@Test
+func authorizationHistoryReadYieldsToAppendsAndKeepsItsBoundary() throws {
+    let fixture = try HistoryStoreFixture()
+    defer { fixture.remove() }
+    for index in 0..<130 {
+        try #require(fixture.store.append(fixture.record(index: index, date: Date(timeIntervalSince1970: 3_999_900))))
+    }
+    var batches = 0
+    let page = try fixture.store.readRecords(since: nil, limit: nil, maximumDisclosureBytes: nil,
+        beforeSequence: nil, afterBatch: {
+            batches += 1
+            // This would deadlock if decryption still held the append lock.
+            try #require(fixture.store.append(fixture.record(index: 200 + batches,
+                date: Date(timeIntervalSince1970: 3_999_950))))
+        })
+    #expect(batches == 3)
+    #expect(page.records.map(\.command) == (0..<130).reversed().map { "fixture \($0)" })
+    #expect(try fixture.store.records().count == 133)
+}
+
+@Test
+func authorizationHistoryReadCancelsBetweenBatchesWithoutReturningPartialData() throws {
+    let fixture = try HistoryStoreFixture()
+    defer { fixture.remove() }
+    for index in 0..<75 { try #require(fixture.store.append(fixture.record(index: index))) }
+    var canceled = false
+    var batches = 0
+    #expect(throws: CancellationError.self) {
+        try fixture.store.readRecords(since: nil, limit: nil, maximumDisclosureBytes: nil,
+            beforeSequence: nil, isCanceled: { canceled }, afterBatch: {
+                batches += 1
+                canceled = true
+            })
+    }
+    #expect(batches == 1)
+    #expect(throws: CancellationError.self) { try fixture.store.records(isCanceled: { true }) }
+}
+
+@Test(arguments: [nil, 1] as [Int?])
+func authorizationHistoryReadRejectsExternalMutationEvenOnLimitedReads(limit: Int?) throws {
+    let fixture = try HistoryStoreFixture()
+    defer { fixture.remove() }
+    try #require(fixture.store.append(fixture.record(index: 1)))
+    var database: OpaquePointer?
+    try #require(sqlite3_open(fixture.url.path, &database) == SQLITE_OK)
+    defer { sqlite3_close(database) }
+    #expect(throws: AuthorizationHistoryStoreError.verificationFailed) {
+        try fixture.store.readRecords(since: nil, limit: limit, maximumDisclosureBytes: nil,
+            beforeSequence: nil, afterBatch: {
+                try #require(sqlite3_exec(database,
+                    "UPDATE authorization_history SET ciphertext = zeroblob(32)", nil, nil, nil) == SQLITE_OK)
+            })
+    }
+}
+
+@Test(arguments: [false, true])
+func authorizationHistoryReadRejectsOverlappingImportOrMaintenance(maintenance: Bool) throws {
+    let fixture = try HistoryStoreFixture()
+    defer { fixture.remove() }
+    for index in 0..<8 { try #require(fixture.store.append(fixture.record(index: index))) }
+    try fixture.store.setMaximumEncryptedBytes(1_800)
+    #expect(throws: AuthorizationHistoryStoreError.verificationFailed) {
+        try fixture.store.readRecords(since: nil, limit: 1, maximumDisclosureBytes: nil,
+            beforeSequence: nil, afterBatch: {
+                if maintenance { try fixture.store.maintain() }
+                else { try fixture.store.importRecords([fixture.record(index: 9)]) }
+            })
+    }
+}
+
+@Test(arguments: [Int64.min, -1, 0])
+func authorizationHistoryReadRejectsInvalidSequenceBoundaries(sequence: Int64) throws {
+    let fixture = try HistoryStoreFixture()
+    defer { fixture.remove() }
+    try #require(fixture.store.append(fixture.record(index: 1)))
+    var database: OpaquePointer?
+    try #require(sqlite3_open(fixture.url.path, &database) == SQLITE_OK)
+    defer { sqlite3_close(database) }
+    try #require(sqlite3_exec(database,
+        "UPDATE authorization_history SET sequence = \(sequence)", nil, nil, nil) == SQLITE_OK)
+    #expect(throws: AuthorizationHistoryStoreError.verificationFailed) { try fixture.store.records() }
+}
+
 private final class HistoryStoreFixture {
     let directory: URL
     let url: URL

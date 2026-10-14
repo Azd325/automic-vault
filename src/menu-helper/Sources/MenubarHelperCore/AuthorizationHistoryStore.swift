@@ -235,11 +235,12 @@ public final class AuthorizationHistoryStore: @unchecked Sendable {
     public func records(
         since: Date? = nil,
         limit: Int? = nil,
-        maximumDisclosureBytes: Int? = nil
+        maximumDisclosureBytes: Int? = nil,
+        isCanceled: () -> Bool = { false }
     ) throws -> [AccessRequestRecord] {
         try readRecords(
             since: since, limit: limit, maximumDisclosureBytes: maximumDisclosureBytes,
-            beforeSequence: nil).records
+            beforeSequence: nil, isCanceled: isCanceled).records
     }
 
     public func page(beforeSequence: Int64? = nil, limit: Int = 50) throws -> AuthorizationHistoryPage {
@@ -248,90 +249,112 @@ public final class AuthorizationHistoryStore: @unchecked Sendable {
             beforeSequence: beforeSequence, includeStoredDayCount: beforeSequence == nil)
     }
 
-    private func readRecords(
+    func readRecords(
         since: Date?, limit: Int?, maximumDisclosureBytes: Int?, beforeSequence: Int64?,
-        includeStoredDayCount: Bool = false
+        includeStoredDayCount: Bool = false,
+        isCanceled: () -> Bool = { false },
+        afterBatch: () throws -> Void = {}
     ) throws -> AuthorizationHistoryPage {
         guard limit.map({ $0 > 0 }) ?? true,
               beforeSequence.map({ $0 > 0 }) ?? true,
               maximumDisclosureBytes.map({ $0 >= 2 }) ?? true else {
             throw AuthorizationHistoryStoreError.invalidLimit
         }
-        return try lock.withLock {
+        guard !isCanceled() else { throw CancellationError() }
+        let (revision, dataVersion, upperSequence, maximumAge) = try lock.withLock {
+            let version = try dashboardDataVersion()
             var statement: OpaquePointer?
-            let sql = beforeSequence == nil
-                ? "SELECT id, retention_bucket, ciphertext, sequence FROM authorization_history ORDER BY sequence DESC"
-                : "SELECT id, retention_bucket, ciphertext, sequence FROM authorization_history WHERE sequence < ? ORDER BY sequence DESC"
-            try prepare(sql, into: &statement)
+            // Separate aggregates let SQLite seek both index endpoints instead of scanning under lock.
+            try prepare("SELECT (SELECT COALESCE(MAX(sequence), 0) FROM authorization_history), (SELECT COALESCE(MIN(sequence), 1) FROM authorization_history)", into: &statement)
             defer { sqlite3_finalize(statement) }
-            if let beforeSequence {
-                guard sqlite3_bind_int64(statement, 1, beforeSequence) == SQLITE_OK else {
+            guard sqlite3_step(statement) == SQLITE_ROW else { throw sqliteError("history boundary failed") }
+            guard sqlite3_column_int64(statement, 1) > 0 else {
+                throw AuthorizationHistoryStoreError.verificationFailed
+            }
+            return (dashboardRevision, version, sqlite3_column_int64(statement, 0), retention.maximumAge)
+        }
+        let currentDate = now()
+        let cutoff = currentDate.addingTimeInterval(-maximumAge)
+        let effectiveSince = max(since ?? cutoff, cutoff)
+        var records: [AccessRequestRecord] = []
+        var olderPageCursor: Int64?
+        var storedDays: Set<Date> = []
+        var dayByHour: [Int64: Date] = [:]
+        let calendar = Calendar.autoupdatingCurrent
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.sortedKeys]
+        var disclosureBytes = 2 // JSON array brackets.
+        var cursor = min(upperSequence, beforeSequence.map { $0 - 1 } ?? upperSequence)
+        scan: while cursor > 0 {
+            guard !isCanceled() else { throw CancellationError() }
+            let rows: [(Int64, String, Data, Data)] = try lock.withLock {
+                var statement: OpaquePointer?
+                try prepare("SELECT id, retention_bucket, ciphertext, sequence FROM authorization_history WHERE sequence <= ? ORDER BY sequence DESC LIMIT 64", into: &statement)
+                defer { sqlite3_finalize(statement) }
+                guard sqlite3_bind_int64(statement, 1, cursor) == SQLITE_OK else {
                     throw sqliteError("history cursor bind failed")
                 }
+                var rows: [(Int64, String, Data, Data)] = []
+                var bytes = 0
+                while true {
+                    switch sqlite3_step(statement) {
+                    case SQLITE_ROW:
+                        guard sqlite3_column_type(statement, 3) == SQLITE_INTEGER,
+                              sqlite3_column_int64(statement, 3) > 0 else {
+                            throw AuthorizationHistoryStoreError.decoding
+                        }
+                        let ciphertext = data(at: 2, from: statement)
+                        rows.append((sqlite3_column_int64(statement, 3), try storedRecordID(from: statement),
+                                     data(at: 1, from: statement), ciphertext))
+                        bytes += ciphertext.count
+                        if bytes >= 1_048_576 { return rows }
+                    case SQLITE_DONE: return rows
+                    default: throw sqliteError("read failed")
+                    }
+                }
             }
-            let currentDate = now()
-            let cutoff = currentDate.addingTimeInterval(-retention.maximumAge)
-            let effectiveSince = max(since ?? cutoff, cutoff)
-            var records: [AccessRequestRecord] = []
-            var olderPageCursor: Int64?
-            var storedDays: Set<Date> = []
-            var dayByHour: [Int64: Date] = [:]
-            let calendar = Calendar.autoupdatingCurrent
-            let encoder = JSONEncoder()
-            encoder.dateEncodingStrategy = .iso8601
-            encoder.outputFormatting = [.sortedKeys]
-            var disclosureBytes = 2 // JSON array brackets.
-            while true {
-                switch sqlite3_step(statement) {
-                case SQLITE_ROW:
-                    guard sqlite3_column_type(statement, 3) == SQLITE_INTEGER else {
-                        throw AuthorizationHistoryStoreError.decoding
-                    }
-                    let sequence = sqlite3_column_int64(statement, 3)
-                    let id = try storedRecordID(from: statement)
-                    let bucket = data(at: 1, from: statement)
-                    let record = try decode(
-                        data(at: 2, from: statement),
-                        id: id,
-                        bucket: bucket
+            guard !rows.isEmpty else { break }
+            try afterBatch()
+            for (sequence, id, bucket, ciphertext) in rows {
+                guard !isCanceled() else { throw CancellationError() }
+                let record = try decode(ciphertext, id: id, bucket: bucket)
+                cursor = sequence - 1
+                if record.date < effectiveSince || record.date > currentDate { continue }
+                if includeStoredDayCount {
+                    let hour = Int64(floor(record.date.timeIntervalSince1970 / 3_600))
+                    let day = dayByHour[hour] ?? calendar.startOfDay(for: record.date)
+                    dayByHour[hour] = day
+                    storedDays.insert(day)
+                }
+                if limit.map({ records.count >= $0 }) == true { continue }
+                if let maximumDisclosureBytes {
+                    let encoded = try encoder.encode(record.redactedForDisclosure)
+                    let (bytes, overflow) = disclosureBytes.addingReportingOverflow(
+                        encoded.count + (records.isEmpty ? 0 : 1)
                     )
-                    if record.date < effectiveSince || record.date > currentDate { continue }
-                    if includeStoredDayCount {
-                        let hour = Int64(floor(record.date.timeIntervalSince1970 / 3_600))
-                        let day = dayByHour[hour] ?? calendar.startOfDay(for: record.date)
-                        dayByHour[hour] = day
-                        storedDays.insert(day)
+                    guard !overflow, bytes <= maximumDisclosureBytes else {
+                        throw AuthorizationHistoryStoreError.disclosureTooLarge
                     }
-                    if limit.map({ records.count >= $0 }) == true { continue }
-                    if let maximumDisclosureBytes {
-                        let encoded = try encoder.encode(record.redactedForDisclosure)
-                        let (bytes, overflow) = disclosureBytes.addingReportingOverflow(
-                            encoded.count + (records.isEmpty ? 0 : 1)
-                        )
-                        guard !overflow, bytes <= maximumDisclosureBytes else {
-                            throw AuthorizationHistoryStoreError.disclosureTooLarge
-                        }
-                        disclosureBytes = bytes
+                    disclosureBytes = bytes
+                }
+                records.append(record)
+                if let limit, records.count == limit {
+                    olderPageCursor = sequence
+                    if !includeStoredDayCount {
+                        break scan
                     }
-                    records.append(record)
-                    if let limit, records.count == limit {
-                        olderPageCursor = sequence
-                        if !includeStoredDayCount {
-                            return AuthorizationHistoryPage(
-                                records: records, olderPageCursor: sequence, storedDayCount: nil)
-                        }
-                    }
-                case SQLITE_DONE:
-                    return AuthorizationHistoryPage(
-                        records: records,
-                        olderPageCursor: olderPageCursor,
-                        storedDayCount: includeStoredDayCount ? storedDays.count : nil
-                    )
-                default:
-                    throw sqliteError("read failed")
                 }
             }
         }
+        try lock.withLock {
+            guard dashboardRevision == revision, try dashboardDataVersion() == dataVersion else {
+                throw AuthorizationHistoryStoreError.verificationFailed
+            }
+        }
+        guard !isCanceled() else { throw CancellationError() }
+        return AuthorizationHistoryPage(records: records, olderPageCursor: olderPageCursor,
+            storedDayCount: includeStoredDayCount ? storedDays.count : nil)
     }
 
     public func dashboard(previous: AuthorizationHistoryDashboard? = nil) throws -> AuthorizationHistoryDashboard {

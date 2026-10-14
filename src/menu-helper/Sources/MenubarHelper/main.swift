@@ -3864,14 +3864,14 @@ private func authorizationHistoryDisclosureValue(
     record: AccessRequestRecord,
     since: Date?,
     maximumReplyBytes: Int? = 1_048_576,
-    records: (Date?, Int?, Int?) -> [AccessRequestRecord]? = loadAccessRequestRecordsForDisclosure,
-    isCanceled: () -> Bool = { false },
+    records: (Date?, Int?, Int?, () -> Bool) -> [AccessRequestRecord]? = loadAccessRequestRecordsForDisclosure,
+    isCanceled: @escaping () -> Bool = { false },
     onAccessRequest: (AccessRequestRecord) -> Bool
 ) -> String? {
     // Legacy clients receive one bounded reply; history-read transfers the complete snapshot.
     let limit = since == nil ? 49 : nil
     guard !isCanceled(),
-          let previousRecords = records(since, limit, maximumReplyBytes),
+          let previousRecords = records(since, limit, maximumReplyBytes, isCanceled),
           !isCanceled()
     else { return nil }
     let encoder = JSONEncoder()
@@ -15713,7 +15713,7 @@ private func runMetadataDisclosureSelfCheck() -> Int32 {
     guard let disclosure = authorizationHistoryDisclosureValue(
         record: record,
         since: nil,
-        records: { _, limit, maximumBytes in
+        records: { _, limit, maximumBytes, _ in
             guard limit == 49, maximumBytes == 1_048_576 else { return nil }
             historyReadCount += 1
             guard !recordedSuccessfulDisclosure else { return nil }
@@ -15736,7 +15736,7 @@ private func runMetadataDisclosureSelfCheck() -> Int32 {
     guard let bounded = authorizationHistoryDisclosureValue(
         record: record,
         since: nil,
-        records: { _, limit, _ in
+        records: { _, limit, _, _ in
             guard limit == 49 else { return nil }
             return Array(repeating: record, count: 49)
         },
@@ -15755,7 +15755,7 @@ private func runMetadataDisclosureSelfCheck() -> Int32 {
     guard let window = authorizationHistoryDisclosureValue(
         record: record,
         since: since,
-        records: { forwardedSince, limit, maximumBytes in
+        records: { forwardedSince, limit, maximumBytes, _ in
             guard forwardedSince == since, limit == nil,
                   maximumBytes == 1_048_576 else { return nil }
             windowReads += 1
@@ -15776,7 +15776,7 @@ private func runMetadataDisclosureSelfCheck() -> Int32 {
         record: record,
         since: since,
         maximumReplyBytes: nil,
-        records: { forwardedSince, limit, maximumBytes in
+        records: { forwardedSince, limit, maximumBytes, _ in
             guard forwardedSince == since, limit == nil, maximumBytes == nil else { return nil }
             return Array(repeating: record, count: 4_000)
         },
@@ -15789,25 +15789,25 @@ private func runMetadataDisclosureSelfCheck() -> Int32 {
     else { return 1 }
     guard authorizationHistoryDisclosureValue(
         record: record, since: since, maximumReplyBytes: nil,
-        records: { _, _, _ in [] }, onAccessRequest: { _ in false }
+        records: { _, _, _, _ in [] }, onAccessRequest: { _ in false }
     ) == nil else { return 1 }
     guard authorizationHistoryDisclosureValue(
         record: record,
         since: since,
-        records: { _, _, _ in Array(repeating: record, count: 4_000) },
+        records: { _, _, _, _ in Array(repeating: record, count: 4_000) },
         onAccessRequest: { _ in true }
     ) == nil else { return 1 }
     guard authorizationHistoryDisclosureValue(
         record: record,
         since: nil,
-        records: { _, _, _ in [] },
+        records: { _, _, _, _ in [] },
         onAccessRequest: { _ in false }
     ) == nil else { return 1 }
     var recordedUnavailableHistory = false
     guard authorizationHistoryDisclosureValue(
         record: record,
         since: nil,
-        records: { _, _, _ in nil },
+        records: { _, _, _, _ in nil },
         onAccessRequest: { _ in
             recordedUnavailableHistory = true
             return true
@@ -15818,9 +15818,11 @@ private func runMetadataDisclosureSelfCheck() -> Int32 {
     guard authorizationHistoryDisclosureValue(
         record: record,
         since: nil,
-        records: { _, _, _ in
+        records: { _, _, _, isCanceled in
+            guard !isCanceled() else { return nil }
             canceledRead.cancel()
-            return []
+            guard isCanceled() else { return [] }
+            return nil
         },
         isCanceled: { canceledRead.isCanceled },
         onAccessRequest: { _ in recordedAfterCancellation = true; return true }

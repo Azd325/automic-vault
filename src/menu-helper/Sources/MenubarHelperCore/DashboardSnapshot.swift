@@ -2120,11 +2120,12 @@ public func appendAccessRequestRecord(
 public func loadAccessRequestRecordsForDisclosure(
     since: Date? = nil,
     limit: Int? = nil,
-    maximumDisclosureBytes: Int? = nil
+    maximumDisclosureBytes: Int? = nil,
+    isCanceled: () -> Bool = { false }
 ) -> [AccessRequestRecord]? {
     guard let store = productionAuthorizationHistoryStore.get() else { return nil }
     let records = try? store.records(
-        since: since, limit: limit, maximumDisclosureBytes: maximumDisclosureBytes)
+        since: since, limit: limit, maximumDisclosureBytes: maximumDisclosureBytes, isCanceled: isCanceled)
     productionAuthorizationHistoryStore.scheduleMaintenanceIfDue(store)
     return records
 }
