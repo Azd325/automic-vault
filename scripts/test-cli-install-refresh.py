@@ -31,6 +31,7 @@ let (historyStarted, historySignal) = AsyncStream<Void>.makeStream()
 let finishHistory = DispatchSemaphore(value: 0)
 let blockHistory = Mutex(false)
 let historyReads = Mutex(0)
+let incrementalReads = Mutex(0)
 let historyDayCount = Mutex(30)
 let failFirstPage = Mutex(false)
 let failOlderPage = Mutex(false)
@@ -53,6 +54,7 @@ struct AuthorizationHistoryDashboard {
     let activityRecords: [AccessRequestRecord]
 }
 func loadAuthorizationHistoryDashboard(previous: AuthorizationHistoryDashboard? = nil) -> AuthorizationHistoryDashboard? {
+    if previous != nil { incrementalReads.withLock { $0 += 1 } }
     guard let page = loadAccessRequestRecordsPage() else { return nil }
     return AuthorizationHistoryDashboard(page: page, activityRecords: ["latest"])
 }
@@ -217,6 +219,24 @@ assert(historyReads.withLock { $0 == 2 }, "history burst did not coalesce")
 finishHistory.signal()
 await model.accessRequestsReloadTask!.value
 assert(historyReads.withLock { $0 == 2 })
+blockHistory.withLock { $0 = false }
+// Sustained notifications must publish each completed snapshot and reuse it.
+model.historyDashboard = nil
+incrementalReads.withLock { $0 = 0 }
+blockHistory.withLock { $0 = true }
+model.reloadAccessRequests(incremental: true)
+for await _ in historyStarted { break }
+for index in 0..<5 {
+    let active = model.accessRequestsReloadTask!
+    for _ in 0..<20 { model.reloadAccessRequests(incremental: true) }
+    finishHistory.signal()
+    await active.value
+    assert(model.historyDashboard != nil, "incremental notifications discarded a usable snapshot")
+    for await _ in historyStarted { break }
+    assert(incrementalReads.withLock { $0 == index + 1 }, "follow-up repeated a full history scan")
+}
+finishHistory.signal()
+await model.accessRequestsReloadTask!.value
 blockHistory.withLock { $0 = false }
 let missingID = UUID()
 model.showAccessRequest(id: missingID)

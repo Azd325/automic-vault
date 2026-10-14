@@ -1093,13 +1093,17 @@ final class DashboardModel: ObservableObject {
     }
 
     func reloadAccessRequests(incremental: Bool = false) {
-        if !incremental { historyDashboard = nil }
-        accessRequestsGeneration += 1
+        if !incremental {
+            historyDashboard = nil
+            accessRequestsGeneration += 1
+        }
         isLoadingOlderHistory = false
         guard accessRequestsReloadTask == nil else {
             accessRequestsReloadPending = true
             return
         }
+        // Coalesced append notifications must not invalidate an in-flight snapshot.
+        accessRequestsGeneration += 1
         let generation = accessRequestsGeneration
         let previous = historyDashboard
         accessRequestsReloadTask = Task { [weak self] in
