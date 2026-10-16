@@ -12647,13 +12647,19 @@ private func launcherIdentity(pid: pid_t, identity: AVProcessIdentity) -> Launch
     launcherIdentities(pid: pid, identity: identity).first
 }
 
-private func launcherIdentities(pid: pid_t, identity: AVProcessIdentity) -> [LauncherIdentity] {
+private func launcherIdentities(
+    pid: pid_t, identity: AVProcessIdentity,
+    signingStatus: (pid_t) -> AVProcessSigningStatus = av_process_signing_status,
+    liveSigning: (pid_t) -> LiveSigningInfo? = liveSigningInfo,
+    executableSigning: (String) -> LiveSigningInfo? = executableSigningInfo
+) -> [LauncherIdentity] {
     let path = pathString(identity)
+    guard processSigningInspectionAllowed(status: signingStatus(pid), path: path) else { return [] }
     let launchers: [LauncherIdentity]
-    if let signing = liveSigningInfo(pid: pid) {
+    if let signing = liveSigning(pid) {
         launchers = launcherIdentities(pid: pid, path: path, signing: signing)
     } else {
-        guard let signing = executableSigningInfo(path: path) else { return [] }
+        guard let signing = executableSigning(path) else { return [] }
         // A path may now name a replacement binary, so it cannot prove the running process is standalone.
         launchers = launcherIdentities(
             pid: pid, path: path, signing: signing, allowsStandaloneFallback: false
@@ -12818,6 +12824,24 @@ private func launcherBundleIntegrityError(for identity: AVProcessIdentity) -> St
             var ancestor = AVProcessIdentity()
             guard av_process_identity(pid, &ancestor) else { break }
             let path = pathString(ancestor)
+            let status = av_process_signing_status(pid)
+            if !processSigningInspectionAllowed(status: status, path: path) {
+                if status == AV_PROCESS_SIGNING_UNTRUSTED {
+                    // A copied/re-signed reserved payload must still deny, without bundle discovery.
+                    guard let identifier = kernelSigningIdentifier(pid: pid) else {
+                        return "Launcher Bundle identity could not be verified"
+                    }
+                    if identifier.hasPrefix(launcherBundleIdentifierPrefix) {
+                        return "Launcher Bundle is outside its managed location"
+                    }
+                    var current = AVProcessIdentity()
+                    guard av_process_identity(pid, &current), sameProcessIdentity(ancestor, current) else {
+                        return "Launcher process changed during verification"
+                    }
+                }
+                pid = ancestor.ppid
+                continue
+            }
             guard let signing = liveSigningInfo(pid: pid) else {
                 pid = ancestor.ppid
                 continue
@@ -12909,7 +12933,29 @@ private struct LauncherAppVerificationFailure {
     }
 }
 
+// Paths only decide whether to attempt verification; they never grant identity or authority.
+private func processSigningInspectionAllowed(status: AVProcessSigningStatus, path: String) -> Bool {
+    status == AV_PROCESS_SIGNING_CANDIDATE
+        || (status == AV_PROCESS_SIGNING_UNTRUSTED && !appBundleURLs(containing: path).isEmpty)
+}
+
+private func processSigningInspectionAllowed(pid: pid_t) -> Bool {
+    let status = av_process_signing_status(pid)
+    if status == AV_PROCESS_SIGNING_CANDIDATE { return true }
+    guard status == AV_PROCESS_SIGNING_UNTRUSTED else { return false }
+    var identity = AVProcessIdentity()
+    return av_process_identity(pid, &identity)
+        && processSigningInspectionAllowed(status: status, path: pathString(identity))
+}
+
+private func kernelSigningIdentifier(pid: pid_t) -> String? {
+    var identifier = [CChar](repeating: 0, count: 1024)
+    guard av_process_signing_identifier(pid, &identifier, identifier.count) else { return nil }
+    return identifier.withUnsafeBufferPointer { String(cString: $0.baseAddress!) }
+}
+
 private func liveSigningInfo(pid: pid_t) -> LiveSigningInfo? {
+    guard processSigningInspectionAllowed(pid: pid) else { return nil }
     var code: SecCode?
     let attributes = [kSecGuestAttributePid as String: NSNumber(value: pid)] as CFDictionary
     guard SecCodeCopyGuestWithAttributes(nil, attributes, [], &code) == errSecSuccess,
@@ -12950,6 +12996,7 @@ private func liveSigningInfo(pid: pid_t) -> LiveSigningInfo? {
 }
 
 private func liveProcessHasNoEntitlements(pid: pid_t) -> Bool {
+    guard processSigningInspectionAllowed(pid: pid) else { return false }
     var code: SecCode?
     let attributes = [kSecGuestAttributePid as String: NSNumber(value: pid)] as CFDictionary
     guard SecCodeCopyGuestWithAttributes(nil, attributes, [], &code) == errSecSuccess,
@@ -12969,6 +13016,7 @@ private func liveProcessHasNoEntitlements(pid: pid_t) -> Bool {
 }
 
 private func liveCodeIdentity(pid: pid_t) -> Data? {
+    guard processSigningInspectionAllowed(pid: pid) else { return nil }
     var code: SecCode?
     let attributes = [kSecGuestAttributePid as String: NSNumber(value: pid)] as CFDictionary
     guard SecCodeCopyGuestWithAttributes(nil, attributes, [], &code) == errSecSuccess,
@@ -13066,6 +13114,10 @@ private func launcherAppVerificationFailure(
             var ancestor = AVProcessIdentity()
             guard av_process_identity(pid, &ancestor) else { break }
             let path = pathString(ancestor)
+            guard processSigningInspectionAllowed(status: av_process_signing_status(pid), path: path) else {
+                pid = ancestor.ppid
+                continue
+            }
             if let signing = liveSigningInfo(pid: pid) ?? executableSigningInfo(path: path) {
                 let containingAppURLs = (
                     appBundleURLs(containing: path)
@@ -15956,7 +16008,7 @@ private func runApprovalSelfCheck() -> Int32 {
     else { return 1 }
     let helperSigning = SigningInfo(identifier: "com.automicvault", teamIdentifier: "TEAM")
     var selfIdentity = AVProcessIdentity()
-    guard av_process_identity(getpid(), &selfIdentity), liveSigningInfo(pid: getpid()) != nil else {
+    guard av_process_identity(getpid(), &selfIdentity) else {
         return 1
     }
     var reusedIdentity = selfIdentity
@@ -15973,11 +16025,19 @@ private func runApprovalSelfCheck() -> Int32 {
               auditSessionID: liveUse.auditSessionID
           ))
     else { return 1 }
+    let signedChild = Process()
+    signedChild.executableURL = URL(fileURLWithPath: "/bin/sleep")
+    signedChild.arguments = ["30"]
+    do { try signedChild.run() } catch { return 1 }
+    defer { signedChild.terminate(); signedChild.waitUntilExit() }
+    var signedIdentity = AVProcessIdentity()
+    guard av_process_identity(signedChild.processIdentifier, &signedIdentity),
+          liveSigningInfo(pid: signedChild.processIdentifier) != nil else { return 1 }
     let reusedDockerPID = CredentialHelperParent(
-        pid: getpid(),
-        startUsec: selfIdentity.start_usec &+ 1,
-        euid: selfIdentity.euid,
-        target: pathString(selfIdentity),
+        pid: signedChild.processIdentifier,
+        startUsec: signedIdentity.start_usec &+ 1,
+        euid: signedIdentity.euid,
+        target: pathString(signedIdentity),
         arguments: []
     )
     guard liveSigningInfo(for: reusedDockerPID) == nil else { return 1 }
@@ -17854,11 +17914,17 @@ private func runApprovalCallsiteSelfCheck() async -> Int32 {
 }
 
 private func runApprovalProcessExecutionSelfCheck() -> Int32 {
+    let child = Process()
+    child.executableURL = URL(fileURLWithPath: "/bin/sleep")
+    child.arguments = ["30"]
+    do { try child.run() } catch { return 1 }
+    defer { child.terminate(); child.waitUntilExit() }
+    let pid = child.processIdentifier
     var identity = AVProcessIdentity()
-    guard av_process_identity(getpid(), &identity) else { return 1 }
-    let fullAncestry = approvalProcessIdentities(gateClientPID: getpid(), launcherPID: getpid())
+    guard av_process_identity(pid, &identity) else { return 1 }
+    let fullAncestry = approvalProcessIdentities(gateClientPID: pid, launcherPID: pid)
     guard identity.ppid > 1, fullAncestry.count > 1,
-          fullAncestry.first?.pid == getpid()
+          fullAncestry.first?.pid == pid
     else {
         print("Approval ancestry must continue above the selected Launcher")
         return 1
@@ -17867,12 +17933,12 @@ private func runApprovalProcessExecutionSelfCheck() -> Int32 {
     identity.audit_session_id = 0
     var reusedIdentity = identity
     reusedIdentity.start_usec &+= 1
-    guard let execution = approvalProcessExecution(pid: getpid(), identity: identity),
+    guard let execution = approvalProcessExecution(pid: pid, identity: identity),
           execution.pidVersion == nil,
           execution.auditSessionID == nil,
           approvalProcessExecutionIsLive(execution),
-          approvalProcessExecution(pid: getpid(), identity: reusedIdentity) == nil,
-          retainedProcessExecution(pid: getpid(), identity: identity) == nil
+          approvalProcessExecution(pid: pid, identity: reusedIdentity) == nil,
+          retainedProcessExecution(pid: pid, identity: identity) == nil
     else { return 1 }
     return 0
 }
@@ -18197,7 +18263,119 @@ private func runDescendantOverrideSelfCheck() -> Bool {
     return true
 }
 
+private func runUntrustedAncestorSigningSelfCheck() -> Bool {
+    let root = FileManager.default.temporaryDirectory.resolvingSymlinksInPath()
+        .appendingPathComponent("av-signing-prefilter-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: root) }
+    do {
+        let links = root.appendingPathComponent(".links")
+        try FileManager.default.createDirectory(at: links, withIntermediateDirectories: true)
+        for (index, identifier) in ["com.example.prefilter", launcherBundleIdentifierPrefix + "fixture"].enumerated() {
+            let executable = root.appendingPathComponent("fixture-\(index)")
+            let alias = links.appendingPathComponent("hash-\(index)")
+            try FileManager.default.copyItem(atPath: "/bin/sleep", toPath: executable.path)
+            let signer = Process()
+            signer.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
+            signer.arguments = ["--force", "--sign", "-", "--identifier", identifier, executable.path]
+            signer.standardError = FileHandle.nullDevice
+            try signer.run()
+            signer.waitUntilExit()
+            guard signer.terminationStatus == 0 else { return false }
+            try FileManager.default.linkItem(at: executable, to: alias)
+            let child = Process()
+            child.executableURL = alias
+            child.arguments = ["30"]
+            try child.run()
+            defer { child.terminate(); child.waitUntilExit() }
+            let pid = child.processIdentifier
+            var ancestor = AVProcessIdentity()
+            guard av_process_identity(pid, &ancestor),
+                  av_process_signing_status(pid) == AV_PROCESS_SIGNING_UNTRUSTED,
+                  kernelSigningIdentifier(pid: pid) == identifier,
+                  liveSigningInfo(pid: pid) == nil, liveCodeIdentity(pid: pid) == nil,
+                  !liveProcessHasNoEntitlements(pid: pid),
+                  retainedProcessExecution(pid: pid, identity: ancestor) == nil,
+                  launcherIdentities(pid: pid, identity: ancestor).isEmpty else { return false }
+            var requestPeer = AVProcessIdentity()
+            requestPeer.ppid = pid
+            // Exercise the History pre-dispatch check and Secret-use ancestry reads.
+            let integrityError = launcherBundleIntegrityError(for: requestPeer)
+            let firstNode = retainedProcessChains(for: requestPeer).first?.first
+            guard (index == 0 ? integrityError == nil
+                    : integrityError == "Launcher Bundle is outside its managed location"),
+                  firstNode?.pid == pid, firstNode?.execution == nil else { return false }
+            _ = launcherAppVerificationFailure(for: requestPeer)
+            var tooSmall = [CChar](repeating: 0, count: 1)
+            guard !av_process_signing_identifier(pid, &tooSmall, tooSmall.count) else { return false }
+        }
+    } catch {
+        fputs("Untrusted ancestor fixture failed: \(error)\n", stderr)
+        return false
+    }
+    return kernelSigningIdentifier(pid: -1) == nil && kernelSigningIdentifier(pid: 0) == nil
+}
+
+private func runLauncherSigningPrefilterSelfCheck() -> Bool {
+    guard runUntrustedAncestorSigningSelfCheck() else {
+        fputs("Untrusted request ancestor signing checks failed\n", stderr)
+        return false
+    }
+    for (path, isApp) in [("/nix/store/.links/fixture", false), ("/usr/local/bin/fixture", false),
+                         ("/nix/store/package/bin/fixture", false),
+                         ("/Applications/Example.app/Contents/MacOS/fixture", true),
+                         ("/Applications/Automic Vault/Fixture.app/Contents/MacOS/launcher", true)] {
+        for status in [AV_PROCESS_SIGNING_UNAVAILABLE, AV_PROCESS_SIGNING_INVALID,
+                       AV_PROCESS_SIGNING_UNTRUSTED, AV_PROCESS_SIGNING_CANDIDATE] {
+            var identity = AVProcessIdentity()
+            path.withCString { source in
+                withUnsafeMutableBytes(of: &identity.path) { bytes in
+                    _ = strcpy(bytes.baseAddress!.assumingMemoryBound(to: CChar.self), source)
+                }
+            }
+            var liveCalls = 0
+            var staticCalls = 0
+            let result = launcherIdentities(pid: getpid(), identity: identity,
+                signingStatus: { _ in status },
+                liveSigning: { _ in liveCalls += 1; return nil },
+                executableSigning: { _ in staticCalls += 1; return nil })
+            let shouldInspect = status == AV_PROCESS_SIGNING_CANDIDATE
+                || (status == AV_PROCESS_SIGNING_UNTRUSTED && isApp)
+            guard result.isEmpty,
+                  liveCalls == (shouldInspect ? 1 : 0),
+                  staticCalls == (shouldInspect ? 1 : 0) else {
+                fputs("Launcher prefilter entered an unexpected signing lookup\n", stderr)
+                return false
+            }
+        }
+    }
+    guard av_process_signing_status(0) == AV_PROCESS_SIGNING_UNAVAILABLE,
+          av_process_signing_status(-1) == AV_PROCESS_SIGNING_UNAVAILABLE else { return false }
+    var ownCode: SecCode?
+    var ownInfo: CFDictionary?
+    guard SecCodeCopySelf([], &ownCode) == errSecSuccess, let ownCode,
+          SecCodeCopySigningInformation(unsafeBitCast(ownCode, to: SecStaticCode.self),
+            SecCSFlags(rawValue: kSecCSSigningInformation), &ownInfo) == errSecSuccess,
+          let dictionary = ownInfo as? [CFString: Any],
+          let flags = dictionary[kSecCodeInfoFlags] as? NSNumber,
+          av_process_signing_status(getpid()) == (flags.uint32Value & secCodeSignatureAdHoc != 0
+            ? AV_PROCESS_SIGNING_UNTRUSTED : AV_PROCESS_SIGNING_CANDIDATE) else {
+        fputs("Launcher prefilter disagrees with self signing information\n", stderr)
+        return false
+    }
+    let child = Process()
+    child.executableURL = URL(fileURLWithPath: "/bin/sleep")
+    child.arguments = ["10"]
+    do { try child.run() } catch { return false }
+    defer { child.terminate(); child.waitUntilExit() }
+    guard av_process_signing_status(child.processIdentifier) == AV_PROCESS_SIGNING_CANDIDATE else {
+        fputs("Launcher prefilter rejected Apple-signed sleep\n", stderr)
+        return false
+    }
+    return true
+}
+
 private func runStandaloneLauncherSelfCheck() -> Int32 {
+    guard runLauncherSigningPrefilterSelfCheck() else { return 1 }
     guard runDescendantOverrideSelfCheck() else { return 1 }
     let codexVerifiedLauncherHelper = selfCheckCodexHelper()
     guard runClaudeHelperRuntimeSelfCheck() else { return 1 }
@@ -19423,12 +19601,17 @@ private func runTransientApprovalSelfCheck() -> Int32 {
 }
 
 private func runRetainedProcessProvenanceSelfCheck() -> Int32 {
+    let child = Process()
+    child.executableURL = URL(fileURLWithPath: "/bin/sleep")
+    child.arguments = ["30"]
+    do { try child.run() } catch { return 1 }
+    defer { child.terminate(); child.waitUntilExit() }
     var currentIdentity = AVProcessIdentity()
-    guard av_process_identity(getpid(), &currentIdentity),
+    guard av_process_identity(child.processIdentifier, &currentIdentity),
           currentIdentity.pidversion > 0,
           currentIdentity.euid == geteuid(),
           let currentExecution = retainedProcessExecution(
-              pid: getpid(),
+              pid: child.processIdentifier,
               identity: currentIdentity
           ),
           retainedProcessExecutionIsLive(currentExecution)
