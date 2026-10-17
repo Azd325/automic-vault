@@ -761,6 +761,13 @@ requested it.
 
 ## iPhone Approval
 
+The companion app supports iPhone (including iPhone Duo) and iPad. References
+below to a phone include either supported device. iPad uses the same account
+root key, registration, subscription, and per-device biometric checks. Neither
+window size nor input method supplies authority. Mac execution of the companion
+app, Mac Catalyst, and visionOS distribution remain disabled. See
+[ADR 0071](adr/0071-ipad-approval.md).
+
 iPhone Approval uses a product-specific 256-bit account root key generated on
 an Apple device and stored as a synchronizable iCloud Keychain item. It does not
 reuse another product's key. Possession of this key makes every eligible iPhone

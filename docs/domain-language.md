@@ -486,7 +486,11 @@ An explicit human decision to allow one Authorization Request. Approval never na
 ### iPhone Approval
 
 An optional Approval transport that moves every human Approval for an enrolled
-Mac to an iPhone signed in to the same iCloud Keychain account. The iPhone
+Mac to an iPhone or iPad signed in to the same iCloud Keychain account.
+The feature retains the name **iPhone Approval** on both platforms. References
+to an eligible iPhone or phone in this model include an eligible iPad; device
+registration and per-device biometric protection have the same requirements.
+The companion device
 carries an Approval; it does not evaluate Authorization Policy, retrieve a
 Secret, persist Authorization History, or enforce an Authorization Decision.
 

@@ -1,6 +1,6 @@
 # ADR 0012: Carry human Approval on iPhone
 
-Status: accepted; Mac-local fallback decision amended by ADR 0017; transient reuse clarified by ADR 0018
+Status: accepted; Mac-local fallback decision amended by ADR 0017; transient reuse clarified by ADR 0018; iPad exclusion amended by ADR 0071
 
 ## Context
 

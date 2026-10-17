@@ -11,13 +11,19 @@
     <key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>
     <key>ITSAppUsesNonExemptEncryption</key><false/>
     <key>ApprovalRelayURL</key><string>https://approval-relay.automicvault.com</string>
-    <key>NSFaceIDUsageDescription</key><string>Automic Vault uses Face ID only when you opt in to authenticate Approvals on this iPhone.</string>
+    <key>NSFaceIDUsageDescription</key><string>Automic Vault uses Face ID only when you opt in to authenticate Approvals on this device.</string>
     <key>UILaunchScreen</key><dict/>
     <key>UIBackgroundModes</key><array>
         <string>remote-notification</string>
     </array>
     <key>UISupportedInterfaceOrientations</key><array>
         <string>UIInterfaceOrientationPortrait</string>
+        <string>UIInterfaceOrientationLandscapeLeft</string>
+        <string>UIInterfaceOrientationLandscapeRight</string>
+    </array>
+    <key>UISupportedInterfaceOrientations~ipad</key><array>
+        <string>UIInterfaceOrientationPortrait</string>
+        <string>UIInterfaceOrientationPortraitUpsideDown</string>
         <string>UIInterfaceOrientationLandscapeLeft</string>
         <string>UIInterfaceOrientationLandscapeRight</string>
     </array>
