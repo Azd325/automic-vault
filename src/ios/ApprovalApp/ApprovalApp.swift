@@ -202,7 +202,7 @@ final class ApprovalModel {
             let granted = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound])
             let authorized = await updateNotificationSettings()
             guard granted, authorized else {
-                state = .unavailable("Notifications are required so Approval requests can reach this iPhone.")
+                state = .unavailable("Notifications are required so Approval requests can reach this device.")
                 return
             }
             UIApplication.shared.registerForRemoteNotifications()
@@ -342,7 +342,7 @@ final class ApprovalModel {
             try await relay.register(deviceID: deviceID, token: deviceToken, environment: environment)
             state = .connected
         } catch {
-            state = .unavailable("Could not register this iPhone: \(error.localizedDescription)")
+            state = .unavailable("Could not register this device: \(error.localizedDescription)")
         }
     }
 

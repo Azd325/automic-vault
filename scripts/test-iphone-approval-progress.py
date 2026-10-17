@@ -26,6 +26,13 @@ history_visibility = views[views.index("    private var showsActivity:"):
 history_visibility = history_visibility.replace("private var", "var")
 assert 'guard let relay, let deviceToken, await updateNotificationSettings()' in source
 assert '.onChange(of: scenePhase)' in views
+# Exercise the actual notification navigation reset from another tab/deep route.
+navigation_reset = views.split(
+    '.onChange(of: model.notificationReviewSequence, initial: true) { _, sequence in', 1
+)[1].split('\n        }', 1)[0]
+navigation_types = views[views.index('private enum ApprovalRoute:'):
+                         views.index('struct ApprovalRootView:')].replace('private enum', 'enum')
+
 notification_methods = source[source.index('    private func updateNotificationSettings()'):source.index('    func enable() async')]
 fixture = r'''
 import Foundation
@@ -134,8 +141,25 @@ METHODS
     }
 HISTORY_VISIBILITY
 }
+NAVIGATION_TYPES
+struct NavigationReview {
+    var selectedTab = ApprovalTab.settings
+    var path: [ApprovalRoute] = [.history(UUID())]
+    var showingSubscription = true
+    var keepsPendingListVisible = true
+    mutating func receive(sequence: UInt64) {
+NAVIGATION_RESET
+    }
+}
 @main struct Check {
     @MainActor static func main() async {
+        var navigation = NavigationReview()
+        navigation.receive(sequence: 0)
+        assert(navigation.selectedTab == .settings && navigation.path.count == 1)
+        assert(navigation.showingSubscription && navigation.keepsPendingListVisible)
+        navigation.receive(sequence: 1)
+        assert(navigation.selectedTab == .requests && navigation.path.isEmpty)
+        assert(!navigation.showingSubscription && !navigation.keepsPendingListVisible)
         let permissions = Model()
         let center = UNUserNotificationCenter.shared
         for status in [UNAuthorizationStatus.denied, .notDetermined, .ephemeral] {
@@ -262,7 +286,7 @@ HISTORY_VISIBILITY
         print("iPhone approval progress and notification routing checks passed")
     }
 }
-'''.replace("NOTIFICATION_METHODS", notification_methods).replace("METHODS", methods).replace("STARTUP_STATE", startup_state).replace("HISTORY_VISIBILITY", history_visibility)
+'''.replace("NOTIFICATION_METHODS", notification_methods).replace("METHODS", methods).replace("STARTUP_STATE", startup_state).replace("HISTORY_VISIBILITY", history_visibility).replace("NAVIGATION_TYPES", navigation_types).replace("NAVIGATION_RESET", navigation_reset)
 with tempfile.TemporaryDirectory(prefix="av-approval-progress-") as directory:
     path = Path(directory)
     (path / "check.swift").write_text(fixture)

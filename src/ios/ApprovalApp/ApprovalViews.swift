@@ -4,8 +4,12 @@ import SwiftUI
 private enum ApprovalRoute: Hashable {
     case pending(UUID)
     case history(UUID)
-    case settings
     case subscription
+}
+
+private enum ApprovalTab: Hashable {
+    case requests
+    case settings
 }
 
 struct ApprovalRootView: View {
@@ -13,11 +17,90 @@ struct ApprovalRootView: View {
     @Bindable var subscription: ApprovalSubscription
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.openURL) private var openURL
+    @State private var selectedTab = ApprovalTab.requests
     @State private var path: [ApprovalRoute] = []
     @State private var showingSubscription = false
     @State private var keepsPendingListVisible = false
 
     var body: some View {
+        TabView(selection: $selectedTab) {
+            Tab("Requests", systemImage: "checkmark.shield", value: ApprovalTab.requests) {
+                requests
+            }
+            .badge(model.pending.count)
+            Tab("Settings", systemImage: "gear", value: ApprovalTab.settings) {
+                NavigationStack {
+                    ApprovalSettingsView(model: model, subscription: subscription)
+                        .navigationDestination(for: ApprovalRoute.self) { route in
+                            destination(for: route)
+                        }
+                }
+            }
+        }
+        .tabViewStyle(.sidebarAdaptable)
+        .alert("Approval Error", isPresented: Binding(
+            get: { model.errorMessage != nil },
+            set: { if !$0 { model.errorMessage = nil } }
+        )) {
+            Button("OK") { model.errorMessage = nil }
+        } message: {
+            Text(model.errorMessage ?? "")
+        }
+        .alert("Subscription Error", isPresented: Binding(
+            get: { subscription.errorMessage != nil },
+            set: { if !$0 { subscription.errorMessage = nil } }
+        )) {
+            Button("OK") { subscription.errorMessage = nil }
+        } message: {
+            Text(subscription.errorMessage ?? "")
+        }
+        .sheet(isPresented: $showingSubscription) {
+            NavigationStack {
+                ApprovalSubscriptionView(subscription: subscription)
+            }
+        }
+        .onChange(of: subscription.state) { _, state in
+            guard state == .active, showingSubscription else { return }
+            showingSubscription = false
+            Task { await model.enable() }
+        }
+        .onChange(of: model.pending.count, initial: true) { _, count in
+            if count > 1 { keepsPendingListVisible = true }
+            if count == 0 { keepsPendingListVisible = false }
+        }
+        .onChange(of: model.notificationReviewSequence, initial: true) { _, sequence in
+            guard sequence > 0 else { return }
+            selectedTab = .requests
+            path.removeAll()
+            showingSubscription = false
+            keepsPendingListVisible = false
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { Task { await model.refreshNotificationSettings() } }
+        }
+        .safeAreaInset(edge: .bottom) {
+            if model.notificationsAreOff {
+                VStack(alignment: .leading, spacing: 8) {
+                    Label("Notifications are off", systemImage: "exclamationmark.triangle.fill")
+                        .font(.headline)
+                    Text("Approval requests may only appear when you open Automic Vault.")
+                        .font(.callout)
+                    if model.notificationAuthorizationStatus == .notDetermined {
+                        Button("Enable Notifications") { Task { await model.enable() } }
+                    } else {
+                        Button("Open Notification Settings") {
+                            if let url = URL(string: UIApplication.openNotificationSettingsURLString) { openURL(url) }
+                        }
+                    }
+                }
+                .padding()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.bar)
+            }
+        }
+    }
+
+    private var requests: some View {
         NavigationStack(path: $path) {
             Group {
                 if let request = notificationRequest {
@@ -41,72 +124,6 @@ struct ApprovalRootView: View {
             .navigationTitle(model.notificationReviewTicket != nil ? "Approval" : showsActivity ? "Request History" : "Approvals")
             .navigationDestination(for: ApprovalRoute.self) { route in
                 destination(for: route)
-            }
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    NavigationLink(value: ApprovalRoute.settings) {
-                        Label("Settings", systemImage: "gear")
-                    }
-                }
-            }
-            .alert("Approval Error", isPresented: Binding(
-                get: { model.errorMessage != nil },
-                set: { if !$0 { model.errorMessage = nil } }
-            )) {
-                Button("OK") { model.errorMessage = nil }
-            } message: {
-                Text(model.errorMessage ?? "")
-            }
-            .alert("Subscription Error", isPresented: Binding(
-                get: { subscription.errorMessage != nil },
-                set: { if !$0 { subscription.errorMessage = nil } }
-            )) {
-                Button("OK") { subscription.errorMessage = nil }
-            } message: {
-                Text(subscription.errorMessage ?? "")
-            }
-            .sheet(isPresented: $showingSubscription) {
-                NavigationStack {
-                    ApprovalSubscriptionView(subscription: subscription)
-                }
-            }
-            .onChange(of: subscription.state) { _, state in
-                guard state == .active, showingSubscription else { return }
-                showingSubscription = false
-                Task { await model.enable() }
-            }
-            .onChange(of: model.pending.count, initial: true) { _, count in
-                if count > 1 { keepsPendingListVisible = true }
-                if count == 0 { keepsPendingListVisible = false }
-            }
-            .onChange(of: model.notificationReviewSequence, initial: true) { _, sequence in
-                guard sequence > 0 else { return }
-                path.removeAll()
-                showingSubscription = false
-                keepsPendingListVisible = false
-            }
-        }
-        .onChange(of: scenePhase) { _, phase in
-            if phase == .active { Task { await model.refreshNotificationSettings() } }
-        }
-        .safeAreaInset(edge: .bottom) {
-            if model.notificationsAreOff {
-                VStack(alignment: .leading, spacing: 8) {
-                    Label("Notifications are off", systemImage: "exclamationmark.triangle.fill")
-                        .font(.headline)
-                    Text("Approval requests may only appear when you open Automic Vault.")
-                        .font(.callout)
-                    if model.notificationAuthorizationStatus == .notDetermined {
-                        Button("Enable Notifications") { Task { await model.enable() } }
-                    } else {
-                        Button("Open Notification Settings") {
-                            if let url = URL(string: UIApplication.openNotificationSettingsURLString) { openURL(url) }
-                        }
-                    }
-                }
-                .padding()
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(.bar)
             }
         }
     }
@@ -134,7 +151,9 @@ struct ApprovalRootView: View {
                 Button("Done") { model.dismissNotificationReview() }
                     .frame(maxWidth: .infinity)
             }
-            .padding()
+            .padding(20)
+            .frame(maxWidth: 720)
+            .frame(maxWidth: .infinity)
         }
         .navigationBarTitleDisplayMode(.inline)
     }
@@ -166,8 +185,6 @@ struct ApprovalRootView: View {
             } else {
                 ContentUnavailableView("History Entry Unavailable", systemImage: "clock.badge.xmark")
             }
-        case .settings:
-            ApprovalSettingsView(model: model, subscription: subscription)
         case .subscription:
             ApprovalSubscriptionView(subscription: subscription)
         }
@@ -177,7 +194,7 @@ struct ApprovalRootView: View {
         ContentUnavailableView {
             Label("Approve Away from Your Mac", systemImage: "iphone.and.arrow.forward")
         } description: {
-            Text("Use this iPhone for every human Approval on an enrolled Mac. iCloud Keychain and notifications are required.")
+            Text("Use this device for every human Approval on an enrolled Mac. iCloud Keychain and notifications are required.")
         } actions: {
             Button("Enable iPhone Approval") {
                 if subscription.state == .active {
@@ -217,6 +234,7 @@ struct ApprovalDetailView: View {
     @Bindable var model: ApprovalModel
     @Bindable var subscription: ApprovalSubscription
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var showingSubscription = false
 
     var body: some View {
@@ -237,34 +255,42 @@ struct ApprovalDetailView: View {
                         .padding(12)
                         .background(.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
                 }
-                LabeledContent("Working Directory", value: request.cwd)
-                LabeledContent("Secrets", value: request.secretNames.joined(separator: ", "))
+                ApprovalMetadata(label: "Working Directory", value: request.cwd)
+                ApprovalMetadata(label: "Secrets", value: request.secretNames.joined(separator: ", "))
                 HStack {
                     Text("Requested").foregroundStyle(.secondary)
                     Spacer()
                     Text(Date(timeIntervalSince1970: TimeInterval(request.createdAtMilliseconds) / 1_000), style: .relative)
                 }
 
-                Label(request.reason, systemImage: request.requiresFullReview ? "exclamationmark.shield.fill" : "shield")
-                    .foregroundStyle(request.requiresFullReview ? .orange : .primary)
+                Label {
+                    Text(request.reason).fixedSize(horizontal: false, vertical: true)
+                } icon: {
+                    Image(systemName: request.requiresFullReview ? "exclamationmark.shield.fill" : "shield")
+                        .foregroundStyle(request.requiresFullReview ? .orange : .primary)
+                }
 
                 ForEach(Array(request.details.enumerated()), id: \.offset) { _, section in
                     DisclosureGroup(section.title) {
                         VStack(spacing: 10) {
                             ForEach(Array(section.rows.enumerated()), id: \.offset) { _, row in
-                                LabeledContent(row.label, value: row.value)
+                                ApprovalMetadata(label: row.label, value: row.value)
                             }
                         }
                         .padding(.top, 8)
                     }
                 }
 
+                Divider()
+
                 if subscription.state == .active {
-                    HStack(spacing: 12) {
+                    responseLayout {
                         denyButton
                         if isResponding { ProgressView().accessibilityLabel("Responding") }
-                        Button("Approve Once") { Task { await model.approve(request) } }
-                            .buttonStyle(.borderedProminent).controlSize(.large).frame(maxWidth: .infinity)
+                        Button { Task { await model.approve(request) } } label: {
+                            Text("Approve Once").frame(maxWidth: .infinity, minHeight: 24)
+                        }
+                        .buttonStyle(.borderedProminent).controlSize(.large)
                     }
                     .disabled(isResponding)
                 } else if subscription.state == .loading {
@@ -312,8 +338,13 @@ struct ApprovalDetailView: View {
                         .frame(maxWidth: .infinity)
                 }
             }
+            .padding(24)
+            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 24))
             .padding()
+            .frame(maxWidth: 720)
+            .frame(maxWidth: .infinity)
         }
+        .background(Color(.systemGroupedBackground))
         .navigationTitle("Approval")
         .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $showingSubscription) {
@@ -334,10 +365,34 @@ struct ApprovalDetailView: View {
         model.respondingRequestIDs.contains(request.id)
     }
 
+    private var responseLayout: AnyLayout {
+        dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(spacing: 12))
+            : AnyLayout(HStackLayout(spacing: 12))
+    }
+
     private var denyButton: some View {
-        Button("Deny", role: .destructive) { Task { await model.deny(request) } }
-            .buttonStyle(.bordered).controlSize(.large).frame(maxWidth: .infinity)
-            .disabled(isResponding)
+        Button(role: .destructive) { Task { await model.deny(request) } } label: {
+            Text("Deny").frame(maxWidth: .infinity, minHeight: 24)
+        }
+        .buttonStyle(.bordered).controlSize(.large)
+        .disabled(isResponding)
+    }
+}
+
+private struct ApprovalMetadata: View {
+    let label: String
+    let value: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(label).font(.caption).foregroundStyle(.secondary)
+            Text(value)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -353,7 +408,7 @@ struct ApprovalSettingsView: View {
                     get: { model.biometricProtectionEnabled },
                     set: { enabled in Task { await model.setBiometricProtection(enabled) } }
                 ))
-                Text("When enabled, Approve requires biometrics on this iPhone. Passcode, Apple Watch, and a companion Mac cannot substitute.")
+                Text("When enabled, Approve requires biometrics on this device. Passcode, Apple Watch, and a companion Mac cannot substitute.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
             Section {
@@ -468,7 +523,7 @@ struct ApprovalActivityView: View {
             .frame(maxWidth: .infinity)
             .clipped()
             .background(.bar, ignoresSafeAreaEdges: .bottom)
-            .animation(.easeInOut(duration: 0.25), value: connectionMessage != nil)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: connectionMessage != nil)
         }
     }
 
@@ -552,12 +607,15 @@ private extension PhoneApprovalActivity {
 
 struct ApprovalSubscriptionView: View {
     @Bindable var subscription: ApprovalSubscription
+    @Environment(\.dismiss) private var dismiss
+    @ScaledMetric(relativeTo: .largeTitle) private var symbolSize = 52
 
     var body: some View {
         SubscriptionStoreView(productIDs: ApprovalSubscription.productIDs) {
             VStack(spacing: 12) {
                 Image(systemName: "iphone.and.arrow.forward")
-                    .font(.system(size: 52))
+                    .font(.system(size: symbolSize))
+                    .accessibilityHidden(true)
                     .foregroundStyle(.tint)
                 Text("iPhone Approval")
                     .font(.largeTitle.bold())
@@ -580,6 +638,11 @@ struct ApprovalSubscriptionView: View {
         )
         .onInAppPurchaseCompletion { _, result in
             await subscription.handlePurchase(result)
+        }
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Done") { dismiss() }
+            }
         }
         .navigationTitle("Subscription")
         .navigationBarTitleDisplayMode(.inline)
