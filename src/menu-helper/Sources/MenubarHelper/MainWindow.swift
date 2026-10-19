@@ -127,6 +127,7 @@ final class AutomicVaultMainWindowController: NSHostingController<DashboardRootV
             checkForUpdates: checkForUpdates,
             requestScan: requestScan
         ))
+        configureScrollBackground()
     }
 
     @MainActor @preconcurrency required dynamic init?(coder: NSCoder) {
@@ -135,6 +136,16 @@ final class AutomicVaultMainWindowController: NSHostingController<DashboardRootV
             checkForUpdates: {},
             requestScan: {}
         ))
+        configureScrollBackground()
+    }
+
+    private func configureScrollBackground() {
+        if #available(macOS 27, *) {
+            rootView.onListScrollChange = { [weak self] isScrolled in
+                self?.view.window?.titlebarAppearsTransparent = !isScrolled
+                self?.view.window?.titlebarSeparatorStyle = isScrolled ? .automatic : .none
+            }
+        }
     }
 
     override func viewDidAppear() {
@@ -3453,6 +3464,7 @@ struct DashboardRootView: View {
     @State private var secretToDelete: StoredSecret?
     let checkForUpdates: () -> Void
     let requestScan: () -> Void
+    var onListScrollChange: (Bool) -> Void = { _ in }
 
     @ToolbarContentBuilder
     private var cliInstallToolbar: some ToolbarContent {
@@ -3574,7 +3586,7 @@ struct DashboardRootView: View {
             DashboardSidebarView(model: model)
                 .navigationSplitViewColumnWidth(min: 186, ideal: 227, max: 250)
         } content: {
-            DashboardListView(model: model)
+            DashboardListView(model: model, onScrollChange: onListScrollChange)
                 .navigationSplitViewColumnWidth(min: 168, ideal: 255)
                 .toolbar {
                     if #available(macOS 27, *),
@@ -3794,6 +3806,7 @@ private struct DashboardSidebarView: View {
 
 private struct DashboardListView: View {
     @ObservedObject var model: DashboardModel
+    let onScrollChange: (Bool) -> Void
     @FocusState private var isFocused: Bool
 
     var body: some View {
@@ -3870,6 +3883,7 @@ private struct DashboardListView: View {
         .onChange(of: model.selectedSection, initial: true) { _, _ in
             isFocused = true
         }
+        .onDisappear { onScrollChange(false) }
     }
 
     private var itemSelection: Binding<String?> {
@@ -3911,7 +3925,14 @@ private struct DashboardListView: View {
         .focused($isFocused)
 
         if #available(macOS 27, *) {
-            list.scrollEdgeEffectStyle(.hard, for: .top)
+            list
+                .scrollEdgeEffectStyle(.hard, for: .top)
+                .onScrollGeometryChange(for: Bool.self) { geometry in
+                    geometry.contentOffset.y + geometry.contentInsets.top > 0
+                } action: { _, isScrolled in
+                    onScrollChange(isScrolled)
+                }
+                .onDisappear { onScrollChange(false) }
         } else {
             list.overlay(alignment: .top) {
                 Rectangle()
