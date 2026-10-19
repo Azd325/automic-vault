@@ -158,7 +158,6 @@ if [[ ! "$AV_CLI_REVISION" =~ ^[0-9]+$ ]]; then
   exit 64
 fi
 MACOS_SDK_PATH="$(xcrun --sdk macosx --show-sdk-path)"
-MACOS_SDK_VERSION="$(xcrun --sdk macosx --show-sdk-version)"
 swift_build_args=(
   --build-system xcode
   -c release
@@ -167,9 +166,6 @@ swift_build_args=(
   --build-path "$SWIFT_TARGET"
   --arch arm64
   --sdk "$MACOS_SDK_PATH"
-  # Record the SDK used, not the deployment target, for AppKit's linked-SDK behavior.
-  -Xlinker -platform_version -Xlinker macos
-  -Xlinker "$MACOSX_DEPLOYMENT_TARGET" -Xlinker "$MACOS_SDK_VERSION"
 )
 if [[ "$wmo" -eq 1 ]]; then
   swift_build_args+=(-Xswiftc -whole-module-optimization)
