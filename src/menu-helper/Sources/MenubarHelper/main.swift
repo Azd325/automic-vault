@@ -1161,14 +1161,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let outline else { return tinted(image, color: color) }
         let border = tinted(image, color: outline)
         let foreground = tinted(image, color: color ?? .labelColor)
-        let outlined = NSImage(size: image.size, flipped: false) { rect in
+        let outlineLayer = NSImage(size: image.size, flipped: false) { rect in
             let inset = rect.insetBy(dx: 0.75, dy: 0.75)
             for x in [-0.75, 0.0, 0.75] {
                 for y in [-0.75, 0.0, 0.75] {
                     border.draw(in: inset.offsetBy(dx: x, dy: y))
                 }
             }
-            foreground.draw(in: inset)
+            return true
+        }
+        let outlined = NSImage(size: image.size, flipped: false) { rect in
+            outlineLayer.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 0.75)
+            foreground.draw(in: rect.insetBy(dx: 0.75, dy: 0.75))
             return true
         }
         outlined.isTemplate = false
