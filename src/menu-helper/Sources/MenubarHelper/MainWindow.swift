@@ -3547,6 +3547,13 @@ struct DashboardRootView: View {
                        model.selectedSection == .allSecrets || model.selectedSection == .launcherBundles {
                         ToolbarSpacer(.flexible)
                     }
+                    if model.selectedSection == .hardenedTools {
+                        ToolbarItem {
+                            Button("Update All") { model.updateTools(model.toolUpdates.map(\.name)) }
+                                .disabled(model.toolUpdates.isEmpty || model.isUpdatingTools
+                                    || model.isReloading || model.cliInstallState != .current)
+                        }
+                    }
                     if model.selectedSection == .allSecrets {
                         ToolbarItem {
                             Button {
@@ -3799,7 +3806,9 @@ private struct DashboardListView: View {
             }
         }
         .safeAreaInset(edge: .bottom) {
-            if model.selectedSection == .hardenedTools {
+            if model.selectedSection == .hardenedTools,
+               model.toolUpdateError != nil || model.isUpdatingTools || model.toolUpdateMessage != nil
+                || (!model.toolUpdates.isEmpty && model.cliInstallState != .current) {
                 VStack(alignment: .leading, spacing: 8) {
                     if let error = model.toolUpdateError {
                         Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled)
@@ -3808,9 +3817,6 @@ private struct DashboardListView: View {
                     } else if let message = model.toolUpdateMessage {
                         Text(message).font(.caption).foregroundStyle(.secondary)
                     }
-                    Button("Update All") { model.updateTools(model.toolUpdates.map(\.name)) }
-                        .disabled(model.toolUpdates.isEmpty || model.isUpdatingTools
-                            || model.isReloading || model.cliInstallState != .current)
                     if !model.toolUpdates.isEmpty && model.cliInstallState != .current {
                         Text("Install the current av CLI to update Tools.")
                             .font(.caption).foregroundStyle(.secondary)

@@ -38,7 +38,7 @@ Hardened Tools reuses `DashboardModel` search and selection, `DashboardRow`, and
 there is no separate Packages section. Only installed, directly managed packages
 that correspond to Hardened Tools are eligible. Details show failed checks too.
 
-The detail toolbar owns Update for the selected Tool. The listing column owns
+The detail toolbar owns Update for the selected Tool. The listing column toolbar owns
 Update All across eligible Tools, independent of search; it is disabled when no
 updates are available. Both actions are disabled while updating or refreshing,
 or until the current trusted CLI is installed. The list footer owns progress,
