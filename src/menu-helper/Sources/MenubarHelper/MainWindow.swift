@@ -4168,7 +4168,7 @@ private struct DashboardRow: View {
                     .lineLimit(1)
                     .layoutPriority(1)
                 if item.subtitle == String(localized: "Update available") {
-                    Text("Update available")
+                    Text("Outdated")
                         .font(.system(size: 10, weight: .bold))
                         .lineLimit(1)
                         .padding(.horizontal, 6)

@@ -606,3 +606,5 @@
 "Updates complete" = "Updates complete";
 "Install the current av CLI to update Tools." = "Install the current av CLI to update Tools.";
 "Update cancelled" = "Update cancelled";
+
+"Outdated" = "Outdated";

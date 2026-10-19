@@ -606,3 +606,5 @@
 "Updates complete" = "更新完成";
 "Install the current av CLI to update Tools." = "请安装当前版本的 av CLI 以更新工具。";
 "Update cancelled" = "更新已取消";
+
+"Outdated" = "有待更新";
