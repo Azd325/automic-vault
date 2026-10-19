@@ -35,6 +35,7 @@ pub(crate) fn run_aws(stdout: &mut dyn Write, yes: bool) -> Result<(), String> {
     if !has_test_stub {
         crate::cli::ensure_aws_helper_ready()?;
     }
+    let keep_release = !has_test_stub && aws_release::current_release_valid().is_ok();
     let has_test_keychain = crate::test_keychain_dir().is_some();
     let should_import_credentials = should_import_aws_credentials(is_root, has_test_keychain);
     let credentials_path = if should_import_credentials {
@@ -56,7 +57,9 @@ pub(crate) fn run_aws(stdout: &mut dyn Write, yes: bool) -> Result<(), String> {
     )
     .ok();
     writeln!(stdout, "│").ok();
-    if !has_test_stub {
+    if keep_release {
+        writeln!(stdout, "├─ keep the verified AWS CLI release").ok();
+    } else if !has_test_stub {
         writeln!(
             stdout,
             "├─ download AWS's latest available versioned package from {}",
@@ -114,7 +117,7 @@ pub(crate) fn run_aws(stdout: &mut dyn Write, yes: bool) -> Result<(), String> {
         return Ok(());
     }
 
-    let download = if has_test_stub {
+    let download = if has_test_stub || keep_release {
         None
     } else {
         let temporary = TemporaryDirectory::new("aws-release")?;
@@ -146,6 +149,14 @@ pub(crate) fn run_aws(stdout: &mut dyn Write, yes: bool) -> Result<(), String> {
     writeln!(stdout, "╰─ hardened aws").ok();
     super::write_secret_gate_notice(stdout, "aws");
     Ok(())
+}
+
+pub(crate) fn repair_launcher_privileged() -> Result<(), String> {
+    if actual_uid() != 0 {
+        return Err("AWS launcher repair requires root".into());
+    }
+    aws_release::current_release_valid()?;
+    install_aws_stub(Path::new(AWS_STUB_PATH))
 }
 
 pub(crate) fn install_aws_release(
@@ -353,8 +364,7 @@ fn install_privileged(package: Option<(PathBuf, &str, &str)>) -> Result<(), Stri
     if crate::test_env_var("AUTOMIC_VAULT_TEST_AWS_STUB_PATH").is_some() {
         return install_aws_stub(&aws_stub_path());
     }
-    let (package, version, digest) =
-        package.ok_or_else(|| "AWS release download is missing".to_string())?;
+
     super::env_wrapper::validate_privileged_av(Path::new(AV_PATH))?;
     let installed_revision = Command::new(AV_PATH)
         .arg("__version")
@@ -365,9 +375,16 @@ fn install_privileged(package: Option<(PathBuf, &str, &str)>) -> Result<(), Stri
     {
         return Err("update the av CLI from the Automic Vault app before rehardening AWS".into());
     }
-    let status = Command::new(SUDO_PATH)
-        .args([AV_PATH, "__install-aws-release", version, digest])
-        .arg(package)
+    let mut command = Command::new(SUDO_PATH);
+    command.arg(AV_PATH);
+    if let Some((package, version, digest)) = package {
+        command
+            .args(["__install-aws-release", version, digest])
+            .arg(package);
+    } else {
+        command.arg("__repair-aws-launcher");
+    }
+    let status = command
         .status()
         .map_err(|err| format!("failed to run sudo: {err}"))?;
     if status.success() {

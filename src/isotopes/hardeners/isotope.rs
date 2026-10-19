@@ -190,7 +190,6 @@ pub(crate) enum InstallPlan {
     },
     Direct {
         manifest: Manifest,
-        update: bool,
     },
 }
 
@@ -220,8 +219,8 @@ impl InstallPlan {
                 )
                 .ok();
             }
-            Self::Direct { update, .. } => {
-                let verb = if *update { "update" } else { "install" };
+            Self::Direct { .. } => {
+                let verb = "install";
                 if spec.hardener == WRANGLER.hardener {
                     writeln!(stdout, "├─ {verb} /opt/av/wrangler").ok();
                     return;
@@ -247,22 +246,11 @@ impl InstallPlan {
 pub(crate) fn plan(spec: Spec) -> Result<InstallPlan, String> {
     let target = target(spec);
     if installed(spec, &target) {
-        if is_direct_target(spec, &target) {
-            let manifest = current_manifest(spec)?;
-            let current = fs::read_to_string(receipt_path(spec)).ok();
-            if current.as_deref().map(str::trim) != Some(manifest.sha256.as_str()) {
-                return Ok(InstallPlan::Direct {
-                    manifest,
-                    update: true,
-                });
-            }
-        }
         return Ok(InstallPlan::Ready);
     }
     if spec.hardener == WRANGLER.hardener {
         return Ok(InstallPlan::Direct {
             manifest: current_manifest(spec)?,
-            update: false,
         });
     }
     if let Some(brew) = brew_path() {
@@ -273,8 +261,24 @@ pub(crate) fn plan(spec: Spec) -> Result<InstallPlan, String> {
     }
     Ok(InstallPlan::Direct {
         manifest: current_manifest(spec)?,
-        update: false,
     })
+}
+
+pub(super) fn update_installed(spec: Spec) -> Result<(), String> {
+    let target = target(spec);
+    if !is_direct_target(spec, &target) || !installed(spec, &target) {
+        return Err("package is not a directly managed installation".into());
+    }
+    let manifest = current_manifest(spec)?;
+    if fs::read_to_string(receipt_path(spec))
+        .ok()
+        .as_deref()
+        .map(str::trim)
+        == Some(manifest.sha256.as_str())
+    {
+        return Ok(());
+    }
+    install_direct(spec, &manifest)
 }
 
 pub(crate) fn target(spec: Spec) -> PathBuf {
@@ -526,7 +530,9 @@ fn install_direct(spec: Spec, manifest: &Manifest) -> Result<(), String> {
         ));
     }
     extract_and_verify(spec, &archive, &temporary.path)?;
-    if crate::test_env_var("AUTOMIC_VAULT_TEST_ISOTOPE_DIRECT_DIR").is_some() {
+    if unsafe { libc::geteuid() } == 0
+        || crate::test_env_var("AUTOMIC_VAULT_TEST_ISOTOPE_DIRECT_DIR").is_some()
+    {
         return install_privileged(spec.hardener, &manifest.sha256, &archive);
     }
     super::env_wrapper::validate_privileged_av(Path::new(AV_PATH))?;
@@ -851,7 +857,7 @@ pub(super) fn installed(spec: Spec, path: &Path) -> bool {
     if spec.hardener == KUBECTL.hardener {
         return super::kubectl::verify_target(path).is_ok();
     }
-    true
+    signature_valid(path, spec.primary)
 }
 
 pub(super) fn formula_url(spec: Spec) -> String {
@@ -927,7 +933,7 @@ pub(super) struct TemporaryDirectory {
 }
 
 impl TemporaryDirectory {
-    fn new(label: &str) -> Result<Self, String> {
+    pub(super) fn new(label: &str) -> Result<Self, String> {
         Self::new_in(&std::env::temp_dir(), label)
     }
 
@@ -960,6 +966,17 @@ pub(crate) fn now_nanos() -> u128 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_unsigned_executable_is_not_a_release_to_keep() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let directory = TemporaryDirectory::new("unsigned-installed").unwrap();
+        let target = directory.path.join("tool");
+        fs::write(&target, "#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(!installed(GH, &target));
+        assert!(!installed(SUPABASE, &target));
+    }
 
     #[test]
     fn isotope_downloads_require_https() {
@@ -1089,10 +1106,7 @@ mod tests {
 sha256 "29e7f73c54cc1c278b7431bc04d581b468ca033d1782c39c87034515ae5d7070""#,
             );
         }
-        assert!(matches!(
-            plan(GH),
-            Ok(InstallPlan::Direct { update: false, .. })
-        ));
+        assert!(matches!(plan(GH), Ok(InstallPlan::Direct { .. })));
         unsafe {
             std::env::remove_var("AUTOMIC_VAULT_TEST_GH_CLI_PATH");
             std::env::remove_var("AUTOMIC_VAULT_TEST_ISOTOPE_BREW_PATH");
@@ -1146,24 +1160,17 @@ sha256 "29e7f73c54cc1c278b7431bc04d581b468ca033d1782c39c87034515ae5d7070""#,
         let current = plan(WRANGLER);
         fs::remove_file(&target).unwrap();
         let missing = plan(WRANGLER);
+        let missing_update = update_installed(WRANGLER);
         for (key, _) in variables {
             unsafe {
                 std::env::remove_var(key);
             }
         }
-        assert!(matches!(
-            update,
-            Ok(InstallPlan::Direct { update: true, .. })
-        ));
-        assert_eq!(
-            String::from_utf8(output).unwrap(),
-            "├─ update /opt/av/wrangler\n"
-        );
+        assert!(missing_update.is_err());
+        assert!(matches!(update, Ok(InstallPlan::Ready)));
+        assert!(output.is_empty());
         assert!(matches!(current, Ok(InstallPlan::Ready)));
-        assert!(matches!(
-            missing,
-            Ok(InstallPlan::Direct { update: false, .. })
-        ));
+        assert!(matches!(missing, Ok(InstallPlan::Direct { .. })));
     }
 
     #[test]

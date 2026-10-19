@@ -62,7 +62,7 @@ pub(crate) fn run(tool: Tool, stdout: &mut dyn Write, yes: bool) -> Result<(), S
     };
     let terraform_version = if !testing && tool == Tool::Terraform {
         if verify_target(tool, &tool.target()).is_ok() {
-            super::terraform_release::update_version(&tool.target())?
+            None
         } else {
             Some(super::terraform_release::latest_version()?)
         }

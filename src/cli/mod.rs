@@ -72,7 +72,7 @@ modes:
 more:
   $ open https://www.automicvault.com/docs/";
 
-pub(crate) const INSTALL_REVISION: u32 = 68;
+pub(crate) const INSTALL_REVISION: u32 = 69;
 
 pub(crate) fn bash_shell_secret_insecurity_reasons() -> Result<Vec<String>, String> {
     shell_secrets::bash_reasons()
@@ -271,6 +271,21 @@ where
             hardeners::uv_cli::install_privileged(&PathBuf::from(&rest[0])),
             stderr,
         ),
+        Some("__repair-aws-launcher") if rest.is_empty() => {
+            privileged_result(hardeners::aws_cli::repair_launcher_privileged(), stderr)
+        }
+        Some("__update-managed-packages") => {
+            let names: Option<Vec<String>> = rest
+                .iter()
+                .map(|name| name.to_str().map(str::to_owned))
+                .collect();
+            privileged_result(
+                names
+                    .ok_or_else(|| "invalid package name".to_string())
+                    .and_then(|names| hardeners::packages::update_installed(&names)),
+                stderr,
+            )
+        }
         Some("__install-aws-release") if rest.len() == 3 => {
             let Some(version) = rest[0].to_str() else {
                 let _ = writeln!(stderr, "av: invalid AWS release version");
@@ -1187,6 +1202,21 @@ mod tests {
             stderr,
             "av: test path overrides are forbidden during privileged installation\n"
         );
+    }
+
+    #[test]
+    fn private_package_updates_reject_invalid_selections_before_any_installation() {
+        for args in [
+            vec!["av", "__update-managed-packages"],
+            vec!["av", "__update-managed-packages", "brew"],
+            vec!["av", "__update-managed-packages", "aws", "aws"],
+            vec!["av", "__update-managed-packages", "aws;id"],
+        ] {
+            let (code, stdout, stderr) = run_args(&args);
+            assert_eq!(code, 1);
+            assert!(stdout.is_empty());
+            assert!(stderr.contains("invalid managed package update selection"));
+        }
     }
 
     #[test]

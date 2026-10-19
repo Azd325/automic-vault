@@ -6,6 +6,9 @@ official macOS installer package, verifies it, extracts its payload without
 running the installer or its scripts, and installs it under `/opt/av/aws`.
 `/usr/local/bin/aws` remains a one-line Automic Vault launcher.
 
+Hardening keeps an existing verified AWS release. Use Update in Hardened Tools
+for newer releases; updating does not import credentials or change policy.
+
 Automic Vault uses the official release instead of Homebrew's formula because
 AWS signs and notarizes that complete distribution, ships a native universal
 executable with Hardened Runtime, and publishes it directly. Homebrew rebuilds

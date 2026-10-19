@@ -31,13 +31,20 @@ sizes. Check notification review, cancellation, busy responses, subscription
 sheets, and rotation/folding without triggering an Approval. See
 [Apple's Duo preparation guide](https://developer.apple.com/iphone-duo/prepare/).
 
-## macOS Packages
+## macOS managed Tool updates
 
-`DashboardSidebarView` owns navigation; Packages reuses `DashboardModel` search
-and selection, `DashboardRow`, and the existing `InfoBlock` detail presentation.
-Native SwiftUI owns focus, keyboard navigation, scrollbars, and semantic colors.
-Package rows include only installed releases managed directly by Automic Vault,
-including installations needing repair. They show installation and update status
-in text, including unknown and failed checks. Details give the existing Hardener
-command. The shared refresh action reloads status; no package action grants
-authority or bypasses the existing installation flow.
+Hardened Tools reuses `DashboardModel` search and selection, `DashboardRow`, and
+`HardenedToolDetailView`. Available updates use a labeled blue download symbol;
+there is no separate Packages section. Only installed, directly managed packages
+that correspond to Hardened Tools are eligible. Details show failed checks too.
+
+The detail toolbar owns Update for the selected Tool. The listing column owns
+Update All across eligible Tools, independent of search; it is disabled when no
+updates are available. Both actions are disabled while updating or refreshing,
+or until the current trusted CLI is installed. The list footer owns progress,
+success, cancellation, and per-package failures. Completion refreshes diagnostic
+state. Native SwiftUI owns focus, scrollbars, and keyboard activation.
+
+The app uses the existing administrator-approval flow and private installer
+boundary; see [ADR 0072](docs/adr/0072-managed-tool-updates.md). No update action
+migrates credentials or changes Authorization Policy.

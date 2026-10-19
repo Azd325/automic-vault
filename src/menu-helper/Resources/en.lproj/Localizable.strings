@@ -600,3 +600,9 @@
 "Check failed" = "Check failed";
 "Managed by Homebrew" = "Managed by Homebrew";
 "Pinned release" = "Pinned release";
+"Update All" = "Update All";
+"Update this managed Tool" = "Update this managed Tool";
+"Updating Tools…" = "Updating Tools…";
+"Updates complete" = "Updates complete";
+"Install the current av CLI to update Tools." = "Install the current av CLI to update Tools.";
+"Update cancelled" = "Update cancelled";

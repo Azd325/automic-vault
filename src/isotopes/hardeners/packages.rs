@@ -44,10 +44,7 @@ impl PackageStatus {
         match result {
             Ok(true) => {
                 self.update = "Update available";
-                self.detail = format!(
-                    "Run `av harden {}` to install the current verified release.",
-                    self.name
-                );
+                self.detail = "Select this Tool in Hardened Tools and click Update to install the current verified release.".into();
             }
             Ok(false) => {
                 self.update = "Up to date";
@@ -55,8 +52,9 @@ impl PackageStatus {
             }
             Err(error) => {
                 self.update = "Check failed";
-                self.detail =
-                    format!("Could not check for updates: {error}\n\nRefresh Packages to retry.");
+                self.detail = format!(
+                    "Could not check for updates: {error}\n\nRefresh Hardened Tools to retry."
+                );
             }
         }
     }
@@ -152,6 +150,89 @@ pub(crate) fn statuses() -> Vec<PackageStatus> {
     packages
 }
 
+// Private app operation: no credential migration, policy edits, or new installations.
+pub(crate) fn update_installed(names: &[String]) -> Result<(), String> {
+    validate_update_names(names)?;
+    if unsafe { libc::geteuid() } != 0 {
+        return Err("package updates require administrator approval in Automic Vault".into());
+    }
+    if std::env::vars_os().any(|(key, _)| key.to_string_lossy().starts_with("AUTOMIC_VAULT_TEST_"))
+    {
+        return Err("test overrides are forbidden during package updates".into());
+    }
+    let mut failures = Vec::new();
+    for name in names {
+        if let Err(error) = update_one(name) {
+            failures.push(format!("{name}: {error}"));
+        }
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(failures.join("\n"))
+    }
+}
+
+fn validate_update_names(names: &[String]) -> Result<(), String> {
+    if names.is_empty()
+        || names.len() > isotope::PACKAGES.len() + 2
+        || names.iter().any(|name| {
+            !matches!(name.as_str(), "aws" | "terraform")
+                && !isotope::PACKAGES.iter().any(|spec| spec.hardener == name)
+        })
+        || names
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            != names.len()
+    {
+        return Err("invalid managed package update selection".into());
+    }
+    Ok(())
+}
+
+fn update_one(name: &str) -> Result<(), String> {
+    match name {
+        "aws" => {
+            aws_release::current_release_valid()?;
+            if !aws_release::update_available(
+                &aws_release::current_version()?,
+                &aws_release::latest_version()?,
+            )? {
+                return Ok(());
+            }
+            let stage = isotope::TemporaryDirectory::new("aws-update")?;
+            let package = stage.path.join("AWSCLIV2.pkg");
+            let (version, digest) = aws_release::download(&package)?;
+            aws_release::current_release_valid()?;
+            if !aws_release::update_available(&aws_release::current_version()?, &version)? {
+                return Ok(());
+            }
+            aws_release::install_privileged(&version, &digest, &package)
+        }
+        "terraform" => {
+            let target = Path::new(terraform_release::TARGET_PATH);
+            if !fs::symlink_metadata(target).is_ok_and(|metadata| metadata.file_type().is_file()) {
+                return Err("Terraform is not a directly managed installation".into());
+            }
+            let Some(version) = terraform_release::update_version(target)? else {
+                return Ok(());
+            };
+            let stage = isotope::TemporaryDirectory::new("terraform-update")?;
+            let archive = stage.path.join("terraform.zip");
+            let digest = terraform_release::download(&version, &archive)?;
+            terraform_release::install_privileged(&digest, &archive)
+        }
+        _ => {
+            let spec = isotope::PACKAGES
+                .iter()
+                .find(|spec| spec.hardener == name)
+                .ok_or("unknown managed package")?;
+            isotope::update_installed(*spec)
+        }
+    }
+}
+
 fn direct_update(
     receipt: &Path,
     current: impl FnOnce() -> Result<String, String>,
@@ -165,6 +246,21 @@ fn direct_update(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn updates_accept_only_unique_catalog_names() {
+        assert!(
+            validate_update_names(&["aws".into(), "terraform".into(), "wrangler".into()]).is_ok()
+        );
+        for names in [
+            vec![],
+            vec!["brew".into()],
+            vec!["aws;echo".into()],
+            vec!["aws".into(), "aws".into()],
+        ] {
+            assert!(validate_update_names(&names).is_err());
+        }
+    }
 
     #[test]
     fn inventory_only_keeps_installed_directly_managed_packages() {
@@ -199,7 +295,7 @@ mod tests {
         assert!(package.detail.contains("offline"));
         package.update_result(Ok(true));
         assert_eq!(package.update, "Update available");
-        assert!(package.detail.contains("av harden gh"));
+        assert!(package.detail.contains("click Update"));
     }
 
     #[test]

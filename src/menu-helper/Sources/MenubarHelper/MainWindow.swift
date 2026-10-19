@@ -304,6 +304,9 @@ final class DashboardModel: ObservableObject {
     @Published private(set) var snapshot = DashboardSnapshot.empty
     @Published private(set) var hasLoadedInitialSnapshot = false
     @Published private(set) var isReloading = false
+    @Published private(set) var isUpdatingTools = false
+    @Published var toolUpdateError: String?
+    @Published var toolUpdateMessage: String?
     @Published var isAddingSecret = false
     @Published var isRenamingSecret = false
     @Published var isCreatingLauncherBundle = false
@@ -462,15 +465,6 @@ final class DashboardModel: ObservableObject {
         case .overview: [DashboardItem]()
         case .detectors:
             detectorItems
-        case .packages:
-            snapshot.packages.map { package in
-                DashboardItem(
-                    id: package.id,
-                    title: package.name,
-                    subtitle: "\(localizedUIString(package.installation)) · \(localizedUIString(package.update))",
-                    detail: "\(package.detail)\n\nPackage path: `\(package.targetPath)`"
-                )
-            }
         case .doctor:
             snapshot.doctorIssues.map { issue in
                 let paths = [
@@ -492,7 +486,8 @@ final class DashboardModel: ObservableObject {
                 DashboardItem(
                     id: $0.stubPath ?? $0.name,
                     title: $0.name,
-                    subtitle: $0.targetPath ?? "target unknown",
+                    subtitle: packageStatus(for: $0.name)?.update == "Update available"
+                        ? String(localized: "Update available") : ($0.targetPath ?? "target unknown"),
                     detail: [
                         $0.stubPath.map { "Stub: \($0)" },
                         $0.targetPath.map { "Target: \($0)" },
@@ -724,7 +719,6 @@ final class DashboardModel: ObservableObject {
         return switch section {
         case .overview: 0
         case .detectors: snapshot.detectorDisplayCount
-        case .packages: snapshot.packages.count
         case .doctor: snapshot.doctorIssues.count
         case .hardenedTools: snapshot.hardenedTools.count
         case .secretGates: snapshot.secretGates.count
@@ -1514,6 +1508,44 @@ final class DashboardModel: ObservableObject {
         }
     }
 
+    func packageStatus(for name: String) -> PackageStatus? {
+        snapshot.packages.first { $0.name == name }
+    }
+
+    var selectedToolPackage: PackageStatus? {
+        guard selectedSection == .hardenedTools, let item = selectedItem else { return nil }
+        return packageStatus(for: item.title)
+    }
+
+    var toolUpdates: [PackageStatus] {
+        let hardened = Set(snapshot.hardenedTools.map(\.name))
+        return snapshot.packages.filter { hardened.contains($0.name) && $0.update == "Update available" }
+    }
+
+    func updateTools(_ names: [String]) {
+        guard !isUpdatingTools, !isReloading, cliInstallState == .current else { return }
+        let eligible = Set(toolUpdates.map(\.name))
+        guard !names.isEmpty, names.allSatisfy(eligible.contains),
+              let script = managedPackageUpdateScript(names: names) else { return }
+        isUpdatingTools = true
+        toolUpdateError = nil
+        toolUpdateMessage = nil
+        Task {
+            defer { isUpdatingTools = false; reload() }
+            do {
+                let ready = await Task.detached { currentCLIInstallState() == .current }.value
+                guard ready else { throw CLIInstallerError.bundledCLIUnavailable }
+                if try await runCLIInstallerScript(script) {
+                    toolUpdateMessage = String(localized: "Updates complete")
+                } else {
+                    toolUpdateMessage = String(localized: "Update cancelled")
+                }
+            } catch {
+                toolUpdateError = error.localizedDescription
+            }
+        }
+    }
+
     func installCLI() {
         Task {
             do {
@@ -2225,6 +2257,25 @@ func installBundledCLI() async throws -> Bool {
     return installed
 }
 
+private func managedPackageUpdateScript(names: [String]) -> String? {
+    guard !names.isEmpty, names.count <= 20, Set(names).count == names.count,
+          names.allSatisfy({ !$0.isEmpty && $0.utf8.allSatisfy {
+              (97...122).contains($0) || (48...57).contains($0) || $0 == 45
+          } }) else { return nil }
+    let command = (["/usr/bin/env", "-i", "PATH=/usr/bin:/bin:/usr/sbin:/sbin",
+                    installedAVCLIPath, "__update-managed-packages"] + names)
+        .map { "'" + $0 + "'" }.joined(separator: " ")
+    return """
+    try
+        do shell script "\(command)" with administrator privileges
+        return "installed"
+    on error errorMessage number errorNumber
+        if errorNumber is -128 then return "cancelled"
+        error errorMessage number errorNumber
+    end try
+    """
+}
+
 private func runCLIInstallerScript(_ script: String) async throws -> Bool {
     // Keep both AppleScript execution and the administrator wait outside the app's
     // main actor. No quarantined script document is opened through LaunchServices.
@@ -2595,19 +2646,41 @@ func runDashboardSearchSelfCheck() -> Int32 {
     guard DashboardModel(snapshot: statusSnapshot).overviewClearStatus == "No doctor reports",
           findingModel.overviewClearStatus == nil else { return 1 }
     let packageJSON = Data(#"""
-    [{"name":"aws","installation":"Installed","update":"Update available","detail":"Run av harden aws","target_path":"/opt/av/aws/current/aws"},
+    [{"name":"aws","installation":"Installed","update":"Update available","detail":"Select this Tool and click Update to install the current verified release.","target_path":"/opt/av/aws/current/aws"},
      {"name":"gh","installation":"Not installed","update":"Not checked","detail":"Run av harden gh","target_path":"/usr/local/bin/gh"}]
     """#.utf8)
     guard let packages = try? JSONDecoder().decode([PackageStatus].self, from: packageJSON) else { return 1 }
     statusSnapshot.packages = packages
     statusSnapshot.doctorIssues = []
-    let packageModel = DashboardModel(snapshot: statusSnapshot)
-    packageModel.selectSection(.packages)
-    guard packageModel.items.map(\.title) == ["aws", "gh"],
-          packageModel.count(for: .packages) == 2,
+    var noUpdatesSnapshot = statusSnapshot
+    noUpdatesSnapshot.packages = []
+    guard DashboardModel(snapshot: noUpdatesSnapshot).toolUpdates.isEmpty else { return 1 }
+    let packageModel = DashboardModel(snapshot: statusSnapshot, cliInstallState: .current)
+    packageModel.selectSection(.hardenedTools)
+    guard packageModel.toolUpdates.map(\.name) == ["aws"],
           packageModel.count(for: .doctor) == 0 else { return 1 }
-    packageModel.searchText = "Not installed"
-    guard packageModel.items.map(\.title) == ["gh"] else { return 1 }
+    packageModel.searchText = "Update available"
+    guard packageModel.items.map(\.title) == ["aws"] else { return 1 }
+    guard managedPackageUpdateScript(names: ["aws", "terraform"])?.contains("__update-managed-packages") == true,
+          managedPackageUpdateScript(names: []) == nil,
+          managedPackageUpdateScript(names: ["aws;id"]) == nil,
+          managedPackageUpdateScript(names: ["aws", "aws"]) == nil else { return 1 }
+    if let directory = ProcessInfo.processInfo.environment["AV_TOOLS_RENDER_DIR"] {
+        packageModel.searchText = ""
+        packageModel.selectedItemID = packageModel.items.first { $0.title == "aws" }?.id
+        let window = NSWindow(contentViewController: NSHostingController(rootView: DashboardRootView(
+            model: packageModel, checkForUpdates: {}, requestScan: {})))
+        window.setContentSize(NSSize(width: 1100, height: 700))
+        window.orderFront(nil)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+        guard let view = window.contentView?.superview,
+              let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return 1 }
+        view.cacheDisplay(in: view.bounds, to: bitmap)
+        guard let data = bitmap.representation(using: .png, properties: [:]) else { return 1 }
+        do { try data.write(to: URL(fileURLWithPath: directory).appendingPathComponent("tool-updates.png")) }
+        catch { return 1 }
+        window.orderOut(nil)
+    }
     var gatedSnapshot = model.snapshot
     gatedSnapshot.secretGates.append(SecretGate(id: "aws", keyPatterns: [], routes: [],
         defaultProtection: .noAccess, appPolicies: []))
@@ -3218,7 +3291,6 @@ enum DashboardSection: String, CaseIterable, Identifiable {
     case overview
     case detectors
     case hardenedTools
-    case packages
     case secretGates
     case blessedScripts
     case launcherBundles
@@ -3234,7 +3306,6 @@ enum DashboardSection: String, CaseIterable, Identifiable {
         switch self {
         case .overview: String(localized: "Overview")
         case .detectors: String(localized: "Detectors")
-        case .packages: String(localized: "Packages")
         case .doctor: String(localized: "Doctor")
         case .hardenedTools: String(localized: "Hardened Tools")
         case .secretGates: String(localized: "Authorization Gates")
@@ -3251,7 +3322,6 @@ enum DashboardSection: String, CaseIterable, Identifiable {
         switch self {
         case .overview: "square.grid.2x2"
         case .detectors: String(localized: "sensor.tag.radiowaves.forward")
-        case .packages: "shippingbox.fill"
         case .doctor: String(localized: "stethoscope")
         case .hardenedTools: String(localized: "hammer")
         case .secretGates: String(localized: "lock.shield")
@@ -3367,6 +3437,17 @@ struct DashboardRootView: View {
 
     @ViewBuilder
     private var sectionToolbarButtons: some View {
+        if model.selectedToolPackage != nil {
+            Button {
+                if let package = model.selectedToolPackage { model.updateTools([package.name]) }
+            } label: {
+                Label("Update", systemImage: "arrow.down.circle")
+            }
+            .disabled(model.selectedToolPackage?.update != "Update available" || model.isUpdatingTools
+                || model.isReloading || model.cliInstallState != .current)
+            .labelStyle(.titleAndIcon)
+            .help("Update this managed Tool")
+        }
         if model.selectedSection == .secretGates, let gate = model.selectedSecretGate {
             if model.isDiscoveringLauncherHelpers {
                 ProgressView()
@@ -3577,7 +3658,7 @@ private struct DashboardSidebarView: View {
         List(selection: sectionSelection) {
             sidebarRow(.overview).tag(DashboardSection.overview)
             Section("Tools") {
-                ForEach([DashboardSection.detectors, .hardenedTools, .packages, .doctor]) { section in
+                ForEach([DashboardSection.detectors, .hardenedTools, .doctor]) { section in
                     sidebarRow(section).tag(section)
                 }
             }
@@ -3715,6 +3796,29 @@ private struct DashboardListView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 itemList(items)
+            }
+        }
+        .safeAreaInset(edge: .bottom) {
+            if model.selectedSection == .hardenedTools {
+                VStack(alignment: .leading, spacing: 8) {
+                    if let error = model.toolUpdateError {
+                        Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled)
+                    } else if model.isUpdatingTools {
+                        ProgressView("Updating Tools…").controlSize(.small)
+                    } else if let message = model.toolUpdateMessage {
+                        Text(message).font(.caption).foregroundStyle(.secondary)
+                    }
+                    Button("Update All") { model.updateTools(model.toolUpdates.map(\.name)) }
+                        .disabled(model.toolUpdates.isEmpty || model.isUpdatingTools
+                            || model.isReloading || model.cliInstallState != .current)
+                    if !model.toolUpdates.isEmpty && model.cliInstallState != .current {
+                        Text("Install the current av CLI to update Tools.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(12)
+                .background(.bar)
             }
         }
         .sheet(isPresented: $model.isAddingSecret) {
@@ -3992,7 +4096,8 @@ private struct DashboardDetailView: View {
             } else if model.selectedSection == .hardenedTools, let item = model.selectedItem {
                 HardenedToolDetailView(
                     item: item,
-                    records: model.accessRequests(for: item)
+                    records: model.accessRequests(for: item),
+                    package: model.packageStatus(for: item.title)
                 )
                     .padding(.horizontal, 22)
                     .padding(.top, 32)
@@ -4017,7 +4122,7 @@ private struct DashboardDetailView: View {
                     InfoBlock(
                         title: model.selectedSection.title,
                         text: item.detail,
-                        rendersMarkdown: model.selectedSection == .doctor || model.selectedSection == .packages
+                        rendersMarkdown: model.selectedSection == .doctor
                     )
                     if let error = model.errorMessage {
                         InfoBlock(title: "Error", text: error)
@@ -4092,6 +4197,9 @@ private struct DashboardRow: View {
                                 .foregroundStyle(.tertiary)
                         }
                     }
+                } else if item.subtitle == String(localized: "Update available") {
+                    Label("Update available", systemImage: "arrow.down.circle")
+                        .foregroundStyle(.blue)
                 } else {
                     Text(item.subtitle)
                 }
@@ -4128,7 +4236,6 @@ private struct EmptyListView: View {
         switch section {
         case .overview: String(localized: "Review your Tools and configuration")
         case .detectors: String(localized: "Detectors identify developer tool configurations that could expose secrets")
-        case .packages: String(localized: "No installed packages are managed directly by Automic Vault.")
         case .doctor: String(localized: "Doctor identifies problems with your Automic Vault installation and explains how to fix them")
         case .hardenedTools: String(localized: "Hardened Tools secure developer tools with granular access to secrets")
         case .secretGates: String(localized: "Authorization Gates control which operations Verified Launchers may perform through specific Tools")
@@ -4145,7 +4252,6 @@ private struct EmptyListView: View {
         switch section {
         case .overview: nil
         case .detectors: detectionAndHardeningDocumentationURL
-        case .packages: toolHardeningDocumentationURL
         case .doctor: detectionAndHardeningDocumentationURL
         case .hardenedTools: toolHardeningDocumentationURL
         case .secretGates: authorizationGatesDocumentationURL
@@ -5038,6 +5144,7 @@ private struct ReferenceDetailView: View {
     let referenceTitle: String
     let fallbackDocumentation: String
     let badge: ReferenceBadge
+    var packageStatus: PackageStatus? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -5059,6 +5166,10 @@ private struct ReferenceDetailView: View {
                 Text(summary)
                     .font(.system(size: 13))
                     .foregroundStyle(.secondary)
+            }
+
+            if let packageStatus {
+                InfoBlock(title: localizedUIString(packageStatus.update), text: packageStatus.detail, rendersMarkdown: true)
             }
 
             if !item.detail.isEmpty {
@@ -5129,6 +5240,7 @@ private struct ReferenceDetailView: View {
 private struct HardenedToolDetailView: View {
     let item: DashboardItem
     let records: [AccessRequestRecord]
+    let package: PackageStatus?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -5137,7 +5249,8 @@ private struct HardenedToolDetailView: View {
                 summary: "Installed hardening behavior and caveats for this tool.",
                 referenceTitle: "Hardener Reference",
                 fallbackDocumentation: "No hardener documentation is bundled for this item.",
-                badge: ReferenceBadge(title: "Hardened", color: .blue)
+                badge: ReferenceBadge(title: "Hardened", color: .blue),
+                packageStatus: package
             )
             AccessHistoryView(records: records)
         }

@@ -66,8 +66,9 @@ AWS credential application no longer depends on a same-user-mutable Homebrew
 Python environment. Upstream package identity and executable identity remain
 separate verified claims, and package scripts receive no authority.
 
-The Hardener assumes responsibility for AWS CLI updates and performs a network
-download during hardening. Existing Homebrew AWS installations remain usable
+As revised by [ADR 0072](0072-managed-tool-updates.md), Hardened Tools owns
+explicit AWS CLI updates. Hardening downloads only for installation or repair
+and keeps a valid installed release. Existing Homebrew AWS installations remain usable
 only through the exact legacy launcher until the user re-hardens. Other direct
 AWS executables remain callable, but cannot retrieve Automic Vault credentials
 through this helper.

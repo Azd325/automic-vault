@@ -1,6 +1,7 @@
 use std::fs::{self, OpenOptions};
 use std::io::Read;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -33,7 +34,8 @@ fn update_available(installed: &str, latest: &str) -> Result<bool, String> {
 fn current_version(target: &Path) -> Result<String, String> {
     // Never execute an unverified Target, inherit credentials, or load project configuration.
     super::terraform::verify_target(super::terraform::Tool::Terraform, target)?;
-    let mut child = Command::new(target)
+    let mut command = Command::new(target);
+    command
         .args(["version", "-json"])
         .env_clear()
         .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
@@ -43,7 +45,12 @@ fn current_version(target: &Path) -> Result<String, String> {
         .current_dir("/var/empty")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::null());
+    // The app's updater is privileged, but version inspection must not be.
+    if unsafe { libc::geteuid() } == 0 {
+        command.uid(65534).gid(65534);
+    }
+    let mut child = command
         .spawn()
         .map_err(|error| format!("failed to read installed Terraform version: {error}"))?;
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -372,6 +379,7 @@ case "$PWD" in /var/empty|/private/var/empty) ;; *) exit 2 ;; esac
 [ "$TF_CLI_CONFIG_FILE" = /dev/null ] || exit 4
 [ "$CHECKPOINT_DISABLE" = 1 ] || exit 5
 [ -z "$TF_TOKEN_example_com" ] || exit 6
+[ "$(id -u)" != 0 ] || exit 7
 printf '%s' '{"terraform_version":"1.9.9"}'
 "#,
         )

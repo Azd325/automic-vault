@@ -7,10 +7,10 @@ the live Terraform process and exact hostname. An active Homebrew formula,
 competing CLI configuration, and `TF_TOKEN_*` credentials are removed or refused
 rather than silently taking precedence.
 
-Running `av harden terraform` again checks the installed version against
-HashiCorp's latest stable release and upgrades older installations after
-confirmation. Packages reports the same update status. Version checks run only
-a verified Target, without inherited credentials or project configuration.
-Failed checks stop the upgrade; a newer installed version is kept. Downloads
-retain the existing archive, digest, and Developer ID verification before the
-installed Target is replaced.
+`av harden terraform` keeps an existing verified release. Hardened Tools checks
+it against HashiCorp's latest stable release; select Terraform and click Update,
+or use Update All, to upgrade. Version checks run only a verified Target,
+without inherited credentials or project configuration. Failed checks stop the
+upgrade; a newer installed version is kept. Updates retain the existing archive,
+digest, and Developer ID verification before replacing the Target, and do not
+migrate credentials or change Authorization Policy.

@@ -600,3 +600,9 @@
 "Check failed" = "检查失败";
 "Managed by Homebrew" = "由 Homebrew 管理";
 "Pinned release" = "固定版本";
+"Update All" = "全部更新";
+"Update this managed Tool" = "更新此托管工具";
+"Updating Tools…" = "正在更新工具…";
+"Updates complete" = "更新完成";
+"Install the current av CLI to update Tools." = "请安装当前版本的 av CLI 以更新工具。";
+"Update cancelled" = "更新已取消";

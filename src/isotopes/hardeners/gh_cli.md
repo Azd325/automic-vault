@@ -22,8 +22,8 @@ at `/usr/local/bin/gh`. The Isotope:
 ## Credential Migration
 
 Use `av harden gh` to install the Isotope and migrate existing `gh` credentials
-into Automic Vault. Direct installs are updated by running the same command when
-`av doctor gh` reports a new release.
+into Automic Vault. For directly managed installations, Hardened Tools reports new releases and
+provides Update and Update All. Hardening keeps an existing valid release.
 
 ## GitHub HTTPS operations
 
