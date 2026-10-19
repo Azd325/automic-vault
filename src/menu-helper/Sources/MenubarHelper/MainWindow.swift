@@ -3871,8 +3871,9 @@ private struct DashboardListView: View {
         }
     }
 
+    @ViewBuilder
     private func itemList(_ items: [DashboardItem]) -> some View {
-        List(selection: itemSelection) {
+        let list = List(selection: itemSelection) {
             rows(items)
             if model.selectedSection == .secretUsage,
                model.historyOlderPageCursor != nil {
@@ -3898,14 +3899,19 @@ private struct DashboardListView: View {
         }
         .listStyle(.inset)
         .focused($isFocused)
-        .overlay(alignment: .top) {
-            Rectangle()
-                .fill(.bar)
-                .mask(LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom))
-                .frame(height: 52)
-                .padding(.leading, -100)
-                .offset(y: -52)
-                .allowsHitTesting(false)
+
+        if #available(macOS 27, *) {
+            list.scrollEdgeEffectStyle(.hard, for: .top)
+        } else {
+            list.overlay(alignment: .top) {
+                Rectangle()
+                    .fill(.bar)
+                    .mask(LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom))
+                    .frame(height: 52)
+                    .padding(.leading, -100)
+                    .offset(y: -52)
+                    .allowsHitTesting(false)
+            }
         }
     }
 

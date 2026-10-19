@@ -766,9 +766,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         window.contentViewController = controller
         window.title = "Automic Vault"
-        window.titlebarAppearsTransparent = true
+        if #unavailable(macOS 27) {
+            window.titlebarAppearsTransparent = true
+            window.titlebarSeparatorStyle = .none
+        }
         window.titleVisibility = .hidden
-        window.titlebarSeparatorStyle = .none
         window.toolbarStyle = .automatic
         window.isReleasedWhenClosed = false
         window.minSize = NSSize(width: 860, height: 558)
