@@ -67,7 +67,8 @@ its fully qualified formula when Homebrew is available unless a reviewed
 Tool-specific installer owns its multi-file runtime. Without Homebrew,
 executable-only Isotopes are verified against the same manifest and installed
 directly into `/usr/local/bin`; Automic Vault then assumes responsibility for
-their updates. Reviewed multi-file distributions use a verified, root-owned
+their updates. The Packages dashboard owns package update reporting; Doctor
+continues to report broken installation and protection invariants. Reviewed multi-file distributions use a verified, root-owned
 package prefix under `/opt/av/<tool>`, as specified by [ADR
 0031](adr/0031-isotope-installation-selection.md). The multi-file Wrangler
 Isotope uses its tap formula as an update manifest and installs directly into

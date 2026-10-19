@@ -8,8 +8,8 @@ use std::process::Command;
 use std::process::Stdio;
 
 use crate::isotopes::hardeners::{
-    self, HardenerCommand, HardenerMetadata, RequiredExecutable, StubRequirements, aws_release,
-    executable, isotope,
+    self, HardenerCommand, HardenerMetadata, RequiredExecutable, StubRequirements, executable,
+    isotope,
 };
 
 use super::report::{ReportBuilder, Tone};
@@ -523,19 +523,6 @@ fn diagnose_one(
                 .flat_map(|command| diagnose_command(hardener.name, command, path)),
         );
     }
-    if hardener.name == "aws"
-        && hardener.detection.diagnostics.is_empty()
-        && let Some(command) = commands.iter().find(|command| {
-            command.stub_valid
-                && Path::new(&command.target_path) == aws_release::target_path().as_path()
-        })
-    {
-        issues.extend(aws_update_issue(
-            command,
-            aws_release::current_version(),
-            aws_release::latest_version(),
-        ));
-    }
 
     DoctorResult {
         name: hardener.name.to_string(),
@@ -544,41 +531,6 @@ fn diagnose_one(
             .map(|command| command.name.clone())
             .collect(),
         issues,
-    }
-}
-
-fn aws_update_issue(
-    command: &HardenerCommand,
-    installed: Result<String, String>,
-    latest: Result<String, String>,
-) -> Option<DoctorIssue> {
-    match installed.and_then(|installed| {
-        latest.and_then(|latest| {
-            aws_release::update_available(&installed, &latest)
-                .map(|available| (installed, latest, available))
-        })
-    }) {
-        Ok((_, _, false)) => None,
-        Ok((installed, latest, true)) => Some(DoctorIssue {
-            kind: "aws_update_available",
-            command: Some(command.name.clone()),
-            message: format!("AWS CLI {latest} is available; {installed} is installed"),
-            remediation:
-                "Run `av harden aws` to download and install the current verified AWS CLI release."
-                    .into(),
-            stub_path: command.stub_path.clone(),
-            target_path: Some(command.target_path.clone()),
-            resolved_path: None,
-        }),
-        Err(error) => Some(DoctorIssue {
-            kind: "aws_update_check_failed",
-            command: Some(command.name.clone()),
-            message: format!("could not check AWS CLI for updates: {error}"),
-            remediation: "Check the network connection and rerun `av doctor aws`.".into(),
-            stub_path: command.stub_path.clone(),
-            target_path: Some(command.target_path.clone()),
-            resolved_path: None,
-        }),
     }
 }
 
@@ -602,15 +554,8 @@ fn diagnose_command(hardener: &str, command: &HardenerCommand, path: &OsStr) -> 
             issues.extend(path_issue(command, path));
         }
     }
-    if let Some(isotope) = &command.isotope {
-        if let Some(issue) = isotope_path_issue(command, path, |path, identifier| {
-            isotope::signature_valid(path, identifier)
-        }) {
-            issues.push(issue);
-        }
-        if let Some(issue) = isotope_update_issue(command, isotope) {
-            issues.push(issue);
-        }
+    if let Some(issue) = isotope_path_issue(command, path, isotope::signature_valid) {
+        issues.push(issue);
     }
     issues
 }
@@ -650,48 +595,6 @@ fn isotope_path_issue(
         target_path: Some(command.target_path.clone()),
         resolved_path,
     })
-}
-
-fn isotope_update_issue(
-    command: &HardenerCommand,
-    doctor: &isotope::Doctor,
-) -> Option<DoctorIssue> {
-    let receipt = doctor.receipt_path.as_deref()?;
-    let installed = fs::read_to_string(receipt).ok();
-    let current = isotope::current_sha(&doctor.formula_url, doctor.repository);
-    match (installed.as_deref().map(str::trim), current) {
-        (Some(installed), Ok(current)) if installed == current => None,
-        (_, Ok(_)) => Some(DoctorIssue {
-            kind: "isotope_update_required",
-            command: Some(command.name.clone()),
-            message: format!(
-                "the directly installed {} isotope has an update available",
-                command.name
-            ),
-            remediation: format!(
-                "Run `av harden {}` to install the current signed isotope.",
-                command.name
-            ),
-            stub_path: command.stub_path.clone(),
-            target_path: Some(command.target_path.clone()),
-            resolved_path: None,
-        }),
-        (_, Err(error)) => Some(DoctorIssue {
-            kind: "isotope_update_check_failed",
-            command: Some(command.name.clone()),
-            message: format!(
-                "could not check the {} isotope for updates: {error}",
-                command.name
-            ),
-            remediation: format!(
-                "Check the network connection and rerun `av doctor {}`.",
-                command.name
-            ),
-            stub_path: command.stub_path.clone(),
-            target_path: Some(command.target_path.clone()),
-            resolved_path: None,
-        }),
-    }
 }
 
 fn target_issue(hardener: &str, command: &HardenerCommand) -> DoctorIssue {
@@ -1936,12 +1839,7 @@ mod tests {
         let directory = temp_dir("isotope-path");
         let gh = executable_file(&directory.join("gh"));
         let mut command = command("gh", true, gh.to_str().unwrap(), gh.to_str().unwrap());
-        command.isotope = Some(isotope::Doctor {
-            identifier: "gh",
-            formula_url: "https://example.invalid/gh-cli.rb".into(),
-            repository: "gh-cli",
-            receipt_path: None,
-        });
+        command.isotope = Some(isotope::Doctor { identifier: "gh" });
         assert!(
             isotope_path_issue(&command, directory.as_os_str(), |_, identifier| identifier
                 == "gh")
@@ -1953,52 +1851,6 @@ mod tests {
                 .kind,
             "isotope_not_first_on_path"
         );
-        let _ = fs::remove_dir_all(directory);
-    }
-
-    #[test]
-    fn aws_update_check_directs_updates_back_to_the_hardener() {
-        let command = command("aws", true, "/usr/local/bin/aws", aws_release::TARGET_PATH);
-        let issue = aws_update_issue(&command, Ok("2.36.21".into()), Ok("2.36.22".into())).unwrap();
-
-        assert_eq!(issue.kind, "aws_update_available");
-        assert!(issue.message.contains("2.36.21"));
-        assert!(issue.message.contains("2.36.22"));
-        assert!(issue.remediation.contains("av harden aws"));
-        assert!(aws_update_issue(&command, Ok("2.36.22".into()), Ok("2.36.22".into())).is_none());
-    }
-
-    #[test]
-    fn direct_isotope_update_check_uses_the_formula_digest() {
-        let _guard = crate::global_test_env_lock().lock().unwrap();
-        let directory = temp_dir("isotope-update");
-        let receipt = directory.join("gh-cli.sha256");
-        let hash = "29e7f73c54cc1c278b7431bc04d581b468ca033d1782c39c87034515ae5d7070";
-        fs::write(&receipt, format!("{hash}\n")).unwrap();
-        unsafe {
-            std::env::set_var(
-                "AUTOMIC_VAULT_TEST_ISOTOPE_FORMULA",
-                format!(
-                    "url \"https://github.com/automic-vault/gh-cli/releases/download/v1/cli.tgz\"\nsha256 \"{hash}\"\n"
-                ),
-            );
-        }
-        let command = command("gh", true, "/usr/local/bin/gh", "/usr/local/bin/gh");
-        let doctor = isotope::Doctor {
-            identifier: "gh",
-            formula_url: "https://example.invalid/gh-cli.rb".into(),
-            repository: "gh-cli",
-            receipt_path: Some(receipt.display().to_string()),
-        };
-        assert!(isotope_update_issue(&command, &doctor).is_none());
-        fs::write(&receipt, "different\n").unwrap();
-        assert_eq!(
-            isotope_update_issue(&command, &doctor).unwrap().kind,
-            "isotope_update_required"
-        );
-        unsafe {
-            std::env::remove_var("AUTOMIC_VAULT_TEST_ISOTOPE_FORMULA");
-        }
         let _ = fs::remove_dir_all(directory);
     }
 

@@ -36,6 +36,7 @@ public struct DashboardSnapshot: Equatable, Sendable {
     public var authorizationHistoryAccessApps: [BlessedScriptLauncher]
     public var secrets: [StoredSecret]
     public var accessRequests: [AccessRequestRecord]
+    public var packages: [PackageStatus]
     public var doctorIssues: [DoctorIssue]
 
     public init(
@@ -49,6 +50,7 @@ public struct DashboardSnapshot: Equatable, Sendable {
         authorizationHistoryAccessApps: [BlessedScriptLauncher] = [],
         secrets: [StoredSecret],
         accessRequests: [AccessRequestRecord] = [],
+        packages: [PackageStatus] = [],
         doctorIssues: [DoctorIssue] = []
     ) {
         self.detectors = detectors
@@ -61,6 +63,7 @@ public struct DashboardSnapshot: Equatable, Sendable {
         self.authorizationHistoryAccessApps = authorizationHistoryAccessApps
         self.secrets = secrets
         self.accessRequests = accessRequests
+        self.packages = packages
         self.doctorIssues = doctorIssues
     }
 
@@ -118,8 +121,23 @@ public struct DashboardSnapshot: Equatable, Sendable {
             authorizationHistoryAccessApps: loadAuthorizationHistoryAccessApps(),
             secrets: secrets,
             accessRequests: [],
+            packages: hardening.packages,
             doctorIssues: hardening.doctorIssues
         )
+    }
+}
+
+public struct PackageStatus: Codable, Equatable, Sendable, Identifiable {
+    public let name: String
+    public let installation: String
+    public let update: String
+    public let detail: String
+    public let targetPath: String
+    public var id: String { name }
+
+    enum CodingKeys: String, CodingKey {
+        case name, installation, update, detail
+        case targetPath = "target_path"
     }
 }
 
@@ -1017,6 +1035,7 @@ struct HardenerReport: Codable {
 }
 
 struct DashboardHardening: Sendable {
+    var packages: [PackageStatus] = []
     let hardeners: [HardenerMetadata]
     let detectors: [DetectorMetadata]
     let secretGates: [SecretGateDescriptor]
@@ -1024,12 +1043,14 @@ struct DashboardHardening: Sendable {
 }
 
 private struct DashboardHardeningReport: Codable {
+    let packages: [PackageStatus]?
     let hardeners: [HardenerMetadata]
     let detectors: [DetectorMetadata]
     let secretGates: [SecretGateDescriptor]
     let results: [DoctorResult]
 
     private enum CodingKeys: String, CodingKey {
+        case packages
         case hardeners
         case detectors
         case secretGates = "secret_gates"
@@ -1092,6 +1113,7 @@ func dashboardHardening(
 ) throws -> DashboardHardening {
     let report = try JSONDecoder().decode(DashboardHardeningReport.self, from: dashboardJSON)
     return DashboardHardening(
+        packages: report.packages ?? [],
         hardeners: report.hardeners,
         detectors: report.detectors,
         secretGates: try validatedSecretGateDescriptors(report.secretGates),

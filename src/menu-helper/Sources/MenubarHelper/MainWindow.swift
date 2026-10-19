@@ -462,6 +462,15 @@ final class DashboardModel: ObservableObject {
         case .overview: [DashboardItem]()
         case .detectors:
             detectorItems
+        case .packages:
+            snapshot.packages.map { package in
+                DashboardItem(
+                    id: package.id,
+                    title: package.name,
+                    subtitle: "\(localizedUIString(package.installation)) · \(localizedUIString(package.update))",
+                    detail: "\(package.detail)\n\nPackage path: `\(package.targetPath)`"
+                )
+            }
         case .doctor:
             snapshot.doctorIssues.map { issue in
                 let paths = [
@@ -715,6 +724,7 @@ final class DashboardModel: ObservableObject {
         return switch section {
         case .overview: 0
         case .detectors: snapshot.detectorDisplayCount
+        case .packages: snapshot.packages.count
         case .doctor: snapshot.doctorIssues.count
         case .hardenedTools: snapshot.hardenedTools.count
         case .secretGates: snapshot.secretGates.count
@@ -1870,13 +1880,6 @@ final class DashboardModel: ObservableObject {
         }
     }
 
-    fileprivate var doctorSeverity: DetectorSeverityLevel {
-        snapshot.doctorIssues.allSatisfy {
-            ["aws_update_available", "isotope_update_required"].contains($0.kind)
-        } ? .medium : .high
-    }
-
-
     func overviewVerification(for tool: DashboardItem) -> String {
         guard tool.isHardened else {
             return snapshot.detectorFindings.first { $0.source == tool.id }?.explanation
@@ -2591,12 +2594,20 @@ func runDashboardSearchSelfCheck() -> Int32 {
     statusSnapshot.detectorFindings = findingSnapshot.detectorFindings
     guard DashboardModel(snapshot: statusSnapshot).overviewClearStatus == "No doctor reports",
           findingModel.overviewClearStatus == nil else { return 1 }
-    statusSnapshot.doctorIssues = ["aws_update_available", "isotope_update_required"].map {
-        DoctorIssue(hardener: "test", kind: $0, message: "Update available", remediation: "Update")
-    }
-    guard DashboardModel(snapshot: statusSnapshot).doctorSeverity == .medium else { return 1 }
-    statusSnapshot.doctorIssues += model.snapshot.doctorIssues
-    guard DashboardModel(snapshot: statusSnapshot).doctorSeverity == .high else { return 1 }
+    let packageJSON = Data(#"""
+    [{"name":"aws","installation":"Installed","update":"Update available","detail":"Run av harden aws","target_path":"/opt/av/aws/current/aws"},
+     {"name":"gh","installation":"Not installed","update":"Not checked","detail":"Run av harden gh","target_path":"/usr/local/bin/gh"}]
+    """#.utf8)
+    guard let packages = try? JSONDecoder().decode([PackageStatus].self, from: packageJSON) else { return 1 }
+    statusSnapshot.packages = packages
+    statusSnapshot.doctorIssues = []
+    let packageModel = DashboardModel(snapshot: statusSnapshot)
+    packageModel.selectSection(.packages)
+    guard packageModel.items.map(\.title) == ["aws", "gh"],
+          packageModel.count(for: .packages) == 2,
+          packageModel.count(for: .doctor) == 0 else { return 1 }
+    packageModel.searchText = "Not installed"
+    guard packageModel.items.map(\.title) == ["gh"] else { return 1 }
     var gatedSnapshot = model.snapshot
     gatedSnapshot.secretGates.append(SecretGate(id: "aws", keyPatterns: [], routes: [],
         defaultProtection: .noAccess, appPolicies: []))
@@ -3207,6 +3218,7 @@ enum DashboardSection: String, CaseIterable, Identifiable {
     case overview
     case detectors
     case hardenedTools
+    case packages
     case secretGates
     case blessedScripts
     case launcherBundles
@@ -3222,6 +3234,7 @@ enum DashboardSection: String, CaseIterable, Identifiable {
         switch self {
         case .overview: String(localized: "Overview")
         case .detectors: String(localized: "Detectors")
+        case .packages: String(localized: "Packages")
         case .doctor: String(localized: "Doctor")
         case .hardenedTools: String(localized: "Hardened Tools")
         case .secretGates: String(localized: "Authorization Gates")
@@ -3238,6 +3251,7 @@ enum DashboardSection: String, CaseIterable, Identifiable {
         switch self {
         case .overview: "square.grid.2x2"
         case .detectors: String(localized: "sensor.tag.radiowaves.forward")
+        case .packages: "shippingbox.fill"
         case .doctor: String(localized: "stethoscope")
         case .hardenedTools: String(localized: "hammer")
         case .secretGates: String(localized: "lock.shield")
@@ -3563,7 +3577,7 @@ private struct DashboardSidebarView: View {
         List(selection: sectionSelection) {
             sidebarRow(.overview).tag(DashboardSection.overview)
             Section("Tools") {
-                ForEach([DashboardSection.detectors, .hardenedTools, .doctor]) { section in
+                ForEach([DashboardSection.detectors, .hardenedTools, .packages, .doctor]) { section in
                     sidebarRow(section).tag(section)
                 }
             }
@@ -3630,7 +3644,7 @@ private struct DashboardSidebarView: View {
                     )
                         .fixedSize()
                 } else if section == .doctor, model.selectedSection != .doctor {
-                    DetectorCountPill(count: count, color: model.doctorSeverity.color)
+                    DetectorCountPill(count: count, color: DetectorSeverityLevel.high.color)
                         .fixedSize()
                 } else if section == .blessedScripts,
                           model.selectedSection != .blessedScripts,
@@ -4003,7 +4017,7 @@ private struct DashboardDetailView: View {
                     InfoBlock(
                         title: model.selectedSection.title,
                         text: item.detail,
-                        rendersMarkdown: model.selectedSection == .doctor
+                        rendersMarkdown: model.selectedSection == .doctor || model.selectedSection == .packages
                     )
                     if let error = model.errorMessage {
                         InfoBlock(title: "Error", text: error)
@@ -4114,6 +4128,7 @@ private struct EmptyListView: View {
         switch section {
         case .overview: String(localized: "Review your Tools and configuration")
         case .detectors: String(localized: "Detectors identify developer tool configurations that could expose secrets")
+        case .packages: String(localized: "Package status is unavailable. Refresh to try again.")
         case .doctor: String(localized: "Doctor identifies problems with your Automic Vault installation and explains how to fix them")
         case .hardenedTools: String(localized: "Hardened Tools secure developer tools with granular access to secrets")
         case .secretGates: String(localized: "Authorization Gates control which operations Verified Launchers may perform through specific Tools")
@@ -4130,6 +4145,7 @@ private struct EmptyListView: View {
         switch section {
         case .overview: nil
         case .detectors: detectionAndHardeningDocumentationURL
+        case .packages: toolHardeningDocumentationURL
         case .doctor: detectionAndHardeningDocumentationURL
         case .hardenedTools: toolHardeningDocumentationURL
         case .secretGates: authorizationGatesDocumentationURL

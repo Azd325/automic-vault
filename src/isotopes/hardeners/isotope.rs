@@ -162,11 +162,16 @@ pub(crate) const KUBECTL: Spec = Spec {
     test_path: "AUTOMIC_VAULT_TEST_KUBECTL_TARGET",
 };
 
+pub(super) const PACKAGES: &[Spec] = &[
+    WRANGLER, GH, STRIPE, SUPABASE, OPENTOFU, OXIDE, FASTLY, SQLCMD, GOAT, RAILWAY, ORDERCLI,
+    OPENHUE, UAA, PLUMBER, ALIYUN, WAKATIME, RCLONE, KUBECTL,
+];
+
 #[derive(Clone, Copy)]
 pub(crate) struct Spec {
     pub(crate) hardener: &'static str,
-    formula: &'static str,
-    repository: &'static str,
+    pub(super) formula: &'static str,
+    pub(super) repository: &'static str,
     primary: &'static str,
     binaries: &'static [&'static str],
     test_path: &'static str,
@@ -175,9 +180,6 @@ pub(crate) struct Spec {
 #[derive(Clone)]
 pub(crate) struct Doctor {
     pub(crate) identifier: &'static str,
-    pub(crate) formula_url: String,
-    pub(crate) repository: &'static str,
-    pub(crate) receipt_path: Option<String>,
 }
 
 pub(crate) enum InstallPlan {
@@ -299,10 +301,6 @@ pub(crate) fn detect(spec: Spec) -> HardenerDetection {
         } else {
             spec.primary
         },
-        formula_url: formula_url(spec),
-        repository: spec.repository,
-        receipt_path: is_direct_target(spec, &target)
-            .then(|| receipt_path(spec).display().to_string()),
     });
     detection
 }
@@ -793,12 +791,12 @@ pub(super) fn receipt_path(spec: Spec) -> PathBuf {
     direct_receipt_dir().join(format!("{}.sha256", spec.formula))
 }
 
-fn is_direct_target(spec: Spec, path: &Path) -> bool {
+pub(super) fn is_direct_target(spec: Spec, path: &Path) -> bool {
     path == direct_target(spec)
         || (spec.hardener == WRANGLER.hardener && path == Path::new(super::wrangler::TARGET))
 }
 
-fn installed(spec: Spec, path: &Path) -> bool {
+pub(super) fn installed(spec: Spec, path: &Path) -> bool {
     if crate::test_env_var(spec.test_path).is_some() {
         return path.exists();
     }
@@ -856,7 +854,7 @@ fn installed(spec: Spec, path: &Path) -> bool {
     true
 }
 
-fn formula_url(spec: Spec) -> String {
+pub(super) fn formula_url(spec: Spec) -> String {
     format!("{TAP_FORMULA_ROOT}/{}.rb", spec.formula)
 }
 

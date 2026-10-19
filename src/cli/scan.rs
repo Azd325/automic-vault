@@ -83,6 +83,7 @@ pub(crate) fn run_dashboard_hardening_json<W: Write>(stdout: &mut W) -> Result<i
     })?;
     let report = serde_json::json!({
         "hardeners": hardener_report,
+        "packages": crate::isotopes::hardeners::packages::statuses(),
         "detectors": json_detectors(Path::new(&home)),
         "secret_gates": json_secret_gates(),
         "results": doctor_report,

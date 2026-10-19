@@ -17,6 +17,7 @@ mod migrations;
 pub(crate) mod openhue_cli;
 pub(crate) mod ordercli;
 pub(crate) mod oxide_cli;
+pub(crate) mod packages;
 pub(crate) mod plumber;
 pub(crate) mod podman;
 pub(crate) mod railway;

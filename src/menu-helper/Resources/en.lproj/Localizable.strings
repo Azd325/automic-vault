@@ -589,3 +589,14 @@
 "Delete…" = "Delete…";
 "Launcher actions for %@" = "Launcher actions for %@";
 "Launcher actions" = "Launcher actions";
+"Packages" = "Packages";
+"Package status is unavailable. Refresh to try again." = "Package status is unavailable. Refresh to try again.";
+"Installed" = "Installed";
+"Needs repair" = "Needs repair";
+"Not installed" = "Not installed";
+"Not checked" = "Not checked";
+"Update available" = "Update available";
+"Up to date" = "Up to date";
+"Check failed" = "Check failed";
+"Managed by Homebrew" = "Managed by Homebrew";
+"Pinned release" = "Pinned release";

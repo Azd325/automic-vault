@@ -8,6 +8,27 @@ const LEGACY_AWS_STUB: &str = include_str!("../src/isotopes/hardeners/aws.legacy
 const HOMEBREW_AWS_STUB: &str = include_str!("../src/isotopes/hardeners/aws.homebrew");
 
 #[test]
+fn doctor_does_not_report_package_update_status() {
+    let root = gh_fixture();
+    let output = gh_doctor(&root)
+        .env("AUTOMIC_VAULT_TEST_ISOTOPE_FORMULA", "invalid manifest")
+        .output()
+        .unwrap();
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    for result in report["results"].as_array().unwrap() {
+        for issue in result["issues"].as_array().unwrap() {
+            let kind = issue["kind"].as_str().unwrap();
+            assert!(!kind.starts_with("isotope_update") && !kind.starts_with("aws_update"));
+        }
+    }
+    assert!(
+        gh_git_issue(&output).is_some(),
+        "integrity/configuration checks remain active"
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn gh_doctor_reports_missing_global_routing_for_an_installed_isotope() {
     let root = gh_fixture();
     let output = gh_doctor(&root).output().unwrap();

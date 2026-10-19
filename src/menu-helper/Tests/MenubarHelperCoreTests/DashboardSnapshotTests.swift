@@ -157,16 +157,32 @@ import Testing
       "hardeners":[{"name":"aws","documentation":"AWS docs","hardened":true,"stub_path":"/usr/local/bin/aws","target_path":"/opt/av/aws/current/aws"}],
       "detectors":[{"name":"aws-cli","homepage":"https://example.com","docs_url":"https://example.com/docs","documentation":"AWS detector","watch_scopes":[]}],
       "secret_gates":[{"id":"aws","key_patterns":["AWS_ACCESS_KEY_ID"],"routes":[{"operation":"inject","script_path":null,"target_path":"/usr/local/bin/aws","caller_identifiers":["com.automicvault.av"],"key_patterns":["AWS_ACCESS_KEY_ID"],"replace_existing_env":false,"allow_missing_keys":false}]}],
-      "results":[{"name":"aws","commands":["aws"],"issues":[{"kind":"aws_update_available","command":"aws","message":"Update available","remediation":"Run `av harden aws`.","stub_path":"/usr/local/bin/aws","target_path":"/opt/av/aws/current/aws","resolved_path":null}]}]
+      "packages":[{"name":"aws","installation":"Installed","update":"Update available","detail":"Run `av harden aws`.","target_path":"/opt/av/aws/current/aws"}],
+      "results":[{"name":"aws","commands":["aws"],"issues":[{"kind":"stub_upgrade_required","command":"aws","message":"Stub repair required","remediation":"Run `av harden aws`.","stub_path":"/usr/local/bin/aws","target_path":"/opt/av/aws/current/aws","resolved_path":null}]}]
     }
     """#.utf8)
 
     let report = try dashboardHardening(from: data, loginShellPATHAvailable: false)
 
+    #expect(report.packages.first?.update == "Update available")
+    #expect(report.packages.first?.targetPath == "/opt/av/aws/current/aws")
     #expect(report.hardeners.map(\.name) == ["aws"])
     #expect(report.detectors.map(\.name) == ["aws-cli"])
     #expect(report.secretGates.map(\.id) == ["aws"])
-    #expect(report.doctorIssues.map(\.kind) == ["aws_update_available"])
+    #expect(report.doctorIssues.map(\.kind) == ["stub_upgrade_required"])
+}
+
+@Test func packageStatusPreservesUnknownAndMissingStates() throws {
+    let data = Data(#"""
+    [
+      {"name":"gh","installation":"Not installed","update":"Not checked","detail":"Install with av harden gh","target_path":"/usr/local/bin/gh"},
+      {"name":"aws","installation":"Installed","update":"Check failed","detail":"offline","target_path":"/opt/av/aws/current/aws"}
+    ]
+    """#.utf8)
+    let packages = try JSONDecoder().decode([PackageStatus].self, from: data)
+    #expect(packages.map(\.id) == ["gh", "aws"])
+    #expect(packages.first?.installation == "Not installed")
+    #expect(packages.last?.update == "Check failed")
 }
 
 @Test func dashboardHardeningLoadsThroughOneExecutableInvocation() throws {
