@@ -34,8 +34,9 @@ sheets, and rotation/folding without triggering an Approval. See
 ## macOS managed Tool updates
 
 Hardened Tools reuses `DashboardModel` search and selection, `DashboardRow`, and
-`HardenedToolDetailView`. Available updates use a labeled blue download symbol;
-there is no separate Packages section. Only installed, directly managed packages
+`HardenedToolDetailView`. Available updates use an orange outlined pill beside the Tool name.
+The sidebar count uses an orange pill when updates are available and the section
+is not selected, matching Detectors. There is no separate Packages section. Only installed, directly managed packages
 that correspond to Hardened Tools are eligible. Details show failed checks too.
 
 The detail toolbar owns Update for the selected Tool. The listing column toolbar owns

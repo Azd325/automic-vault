@@ -3731,6 +3731,11 @@ private struct DashboardSidebarView: View {
                         color: detectorSeverityLevel(model.snapshot.detectorFindings.map(\.severity)).color
                     )
                         .fixedSize()
+                } else if section == .hardenedTools,
+                          !model.toolUpdates.isEmpty,
+                          model.selectedSection != .hardenedTools {
+                    DetectorCountPill(count: count, color: .orange)
+                        .fixedSize()
                 } else if section == .doctor, model.selectedSection != .doctor {
                     DetectorCountPill(count: count, color: DetectorSeverityLevel.high.color)
                         .fixedSize()
@@ -4162,6 +4167,15 @@ private struct DashboardRow: View {
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                     .layoutPriority(1)
+                if item.subtitle == String(localized: "Update available") {
+                    Text("Update available")
+                        .font(.system(size: 10, weight: .bold))
+                        .lineLimit(1)
+                        .padding(.horizontal, 6)
+                        .frame(height: 18)
+                        .outlinedPill(.orange)
+                        .layoutPriority(1)
+                }
                 if let status = item.blessingStatus {
                     BlessingStatusPill(status: status)
                 }
@@ -4203,10 +4217,7 @@ private struct DashboardRow: View {
                                 .foregroundStyle(.tertiary)
                         }
                     }
-                } else if item.subtitle == String(localized: "Update available") {
-                    Label("Update available", systemImage: "arrow.down.circle")
-                        .foregroundStyle(.blue)
-                } else {
+                } else if item.subtitle != String(localized: "Update available") {
                     Text(item.subtitle)
                 }
             }
