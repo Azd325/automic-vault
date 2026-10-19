@@ -608,3 +608,6 @@
 "Update cancelled" = "Update cancelled";
 
 "Outdated" = "Outdated";
+
+"1 outdated hardened tool" = "1 outdated hardened tool";
+"%lld outdated hardened tools" = "%lld outdated hardened tools";

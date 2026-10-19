@@ -3571,6 +3571,15 @@ public func loadSecretGateDescriptors(avExecutableURL: URL) throws -> [SecretGat
     return try secretGateDescriptors(from: data)
 }
 
+public func loadToolAttentionCounts(avExecutableURL: URL) -> (doctor: Int, outdated: Int) {
+    let report = loadDashboardHardening(avExecutableURL: avExecutableURL)
+    let hardened = Set(report.hardeners.filter(\.hardened).map(\.name))
+    let outdated = report.packages.filter {
+        hardened.contains($0.name) && $0.update == "Update available"
+    }.count
+    return (report.doctorIssues.count, outdated)
+}
+
 public func loadDoctorIssues(avExecutableURL: URL) -> [DoctorIssue] {
     let data = loadJSON(
         avExecutableURL: avExecutableURL,

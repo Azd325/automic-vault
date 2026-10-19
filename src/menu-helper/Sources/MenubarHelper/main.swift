@@ -56,6 +56,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let visibleAutoApprovalCount = 5
     private lazy var statusItem = NSStatusBar.system.statusItem(withLength: 15)
     private lazy var scanStatusItem = NSMenuItem(title: String(localized: "Scan pending"), action: nil, keyEquivalent: "")
+    private lazy var outdatedToolsStatusItem = makeSectionMenuItem(title: "", section: .hardenedTools)
     private lazy var doctorStatusItem = makeSectionMenuItem(title: "", section: .doctor)
     private lazy var reblessingStatusItem = makeSectionMenuItem(title: "", section: .blessedScripts)
     private lazy var checkForUpdatesItem = NSMenuItem(
@@ -247,6 +248,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(scanStatusItem)
         menu.addItem(doctorStatusItem)
         menu.addItem(reblessingStatusItem)
+        menu.addItem(outdatedToolsStatusItem)
         menu.addItem(.separator())
         checkForUpdatesItem.target = self
         menu.addItem(checkForUpdatesItem)
@@ -377,6 +379,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
             doctorStatusItem.isHidden = doctorStatusItem.title.isEmpty
             reblessingStatusItem.isHidden = reblessingStatusItem.title.isEmpty
+            outdatedToolsStatusItem.isHidden = outdatedToolsStatusItem.title.isEmpty
             installCLIItem.isHidden = FileManager.default.fileExists(atPath: installedAVCLIPath)
         }
         statusItem.button?.image = brandImage()
@@ -1105,12 +1108,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         reblessingStatusItem.isHidden = count == 0
     }
 
+    private func setOutdatedToolsStatus(count: Int) {
+        guard !isStatusMenuOpen else { return }
+        outdatedToolsStatusItem.title = outdatedToolsStatusTitle(count: count) ?? ""
+        outdatedToolsStatusItem.isHidden = count == 0
+    }
+
     private func refreshDoctorStatus() {
         scanQueue.async { [weak self] in
-            let count = loadDoctorIssues(avExecutableURL: avExecutableURL()).count
+            let counts = loadToolAttentionCounts(avExecutableURL: avExecutableURL())
             let reblessingCount = loadBlessedScripts().filter { blessedScriptStatus($0) == "Changed" }.count
             Task { @MainActor in
-                self?.setDoctorStatus(count: count)
+                self?.setDoctorStatus(count: counts.doctor)
+                self?.setOutdatedToolsStatus(count: counts.outdated)
                 self?.setReblessingStatus(count: reblessingCount)
             }
         }
@@ -1656,11 +1666,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         defer { NSStatusBar.system.removeStatusItem(statusItem) }
         guard let menu = statusItem.menu else { return false }
 
+        setOutdatedToolsStatus(count: 2)
+        guard outdatedToolsStatusItem.title == "2 outdated hardened tools",
+              outdatedToolsStatusTitle(count: 1) == "1 outdated hardened tool",
+              outdatedToolsStatusTitle(count: 0) == nil else { return false }
         setDoctorStatus(count: 2)
         setReblessingStatus(count: 1)
         setScanStatus(vulnerabilityStatusTitle(count: 1), image: nil, section: .detectors)
         for (item, section) in [(scanStatusItem, DashboardSection.detectors),
-                                (doctorStatusItem, .doctor), (reblessingStatusItem, .blessedScripts)] {
+                                (doctorStatusItem, .doctor), (reblessingStatusItem, .blessedScripts),
+                                (outdatedToolsStatusItem, .hardenedTools)] {
             guard !item.isHidden, !item.isSectionHeader, item.isEnabled,
                   item.action == #selector(openSection), item.target === self,
                   item.representedObject as? String == section.rawValue,
@@ -1677,6 +1692,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard moreItem.action == #selector(openSection), moreItem.image != nil,
               moreItem.representedObject as? String == DashboardSection.secretUsage.rawValue
         else { return false }
+        setOutdatedToolsStatus(count: 0)
+        guard outdatedToolsStatusItem.isHidden else { return false }
         setDoctorStatus(count: 0)
         setReblessingStatus(count: 0)
         setScanStatus("No Vulnerabilities Detected", image: nil)
@@ -2141,6 +2158,13 @@ private func boundedScanDelay(
     let startedAt = burstStartedAt ?? now
     burstStartedAt = startedAt
     return min(debounceDelay, max(0, startedAt + maximumDelay - now))
+}
+
+private func outdatedToolsStatusTitle(count: Int) -> String? {
+    guard count > 0 else { return nil }
+    return count == 1
+        ? String(localized: "1 outdated hardened tool")
+        : String(localized: "\(count) outdated hardened tools")
 }
 
 private func doctorStatusTitle(count: Int) -> String? {
