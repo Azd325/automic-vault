@@ -23,6 +23,56 @@ fn gh_doctor_reports_missing_global_routing_for_an_installed_isotope() {
 }
 
 #[test]
+fn gh_doctor_reports_unsupported_git_before_missing_routing() {
+    let root = gh_fixture();
+    let output = gh_doctor(&root)
+        .env(
+            "AUTOMIC_VAULT_TEST_GIT_VERSION",
+            "git version 2.51.0 (Apple Git-156)\n",
+        )
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let issue = report["results"][0]["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|issue| issue["kind"] == "gh_git_transport_unavailable")
+        .expect("unsupported Git must be reported before missing routing");
+    assert!(
+        issue["message"]
+            .as_str()
+            .unwrap()
+            .contains("not been reviewed")
+    );
+    assert!(
+        !issue["remediation"]
+            .as_str()
+            .unwrap()
+            .contains("Run `av harden gh`")
+    );
+    assert!(!root.join("home/.gitconfig").exists());
+    fs::write(root.join("gh/av-git-configuration"), "manual\n").unwrap();
+    let manual = gh_doctor(&root)
+        .env(
+            "AUTOMIC_VAULT_TEST_GIT_VERSION",
+            "git version 2.51.0 (Apple Git-156)\n",
+        )
+        .output()
+        .unwrap();
+    let report: serde_json::Value = serde_json::from_slice(&manual.stdout).unwrap();
+    assert!(
+        report["results"][0]["issues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|issue| !issue["kind"].as_str().unwrap().starts_with("gh_git_"))
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn gh_doctor_reports_unavailable_transport_and_respects_manual_setup() {
     let root = gh_fixture();
     let config = root.join("home/.gitconfig");
@@ -71,6 +121,10 @@ fn gh_doctor(root: &Path) -> Command {
         .env("GH_CONFIG_DIR", root.join("gh"))
         .env("PATH", root.join("bin"))
         .env("AUTOMIC_VAULT_TEST_GH_CLI_PATH", root.join("bin/gh"))
+        .env(
+            "AUTOMIC_VAULT_TEST_GIT_VERSION",
+            "git version 2.50.1 (Apple Git-155)\n",
+        )
         .current_dir(root.join("home"));
     command
 }

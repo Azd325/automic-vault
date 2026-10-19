@@ -137,7 +137,11 @@ pub(crate) fn detect() -> HardenerDetection {
             Err((kind, message)) => detection.diagnostics.push(super::HardenerDiagnostic {
                 kind,
                 message,
-                remediation: "Run `av harden gh` to repair protected Git transport setup, or `av harden gh --without-git-configuration` to manage Git configuration yourself.".into(),
+                remediation: if kind == "gh_git_transport_unavailable" {
+                    "Protected Git transport requires a reviewed Apple Git build. gh hardening remains independent of Git setup. Use `av harden gh --without-git-configuration` to manage Git configuration yourself.".into()
+                } else {
+                    "Run `av harden gh` to repair protected Git transport setup, or `av harden gh --without-git-configuration` to manage Git configuration yourself.".into()
+                },
                 path: None,
             }),
         }

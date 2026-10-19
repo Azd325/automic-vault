@@ -147,6 +147,8 @@ pub(super) fn diagnose(hosts: &Path) -> Result<(), (&'static str, String)> {
     if manual(hosts) {
         return Ok(());
     }
+    crate::cli::git::diagnose_git_support()
+        .map_err(|message| ("gh_git_transport_unavailable", message))?;
     (|| {
         inspect_environment()?;
         if !configuration(config())? {

@@ -110,6 +110,26 @@ pub(crate) fn verify_transport_installation(gh: &Path) -> Result<(), String> {
     Ok(())
 }
 
+pub(crate) fn diagnose_git_support() -> Result<(), String> {
+    if let Some(version) = crate::test_env_string("AUTOMIC_VAULT_TEST_GIT_VERSION") {
+        return reviewed_git_version(version.as_bytes());
+    }
+    // Installation can reuse a verified runtime after the system Git changes.
+    if verify_runtime().is_ok() {
+        return Ok(());
+    }
+    let mut version = Command::new("/usr/bin/git");
+    version.env_clear().arg("--version");
+    reviewed_git_version(&checked(version)?.stdout)
+}
+
+fn reviewed_git_version(version: &[u8]) -> Result<(), String> {
+    if version != REVIEWED_GIT_VERSION {
+        return Err("this Git build has not been reviewed for the protected transport".into());
+    }
+    Ok(())
+}
+
 pub(crate) fn ensure_transport(gh: &Path) -> Result<(), String> {
     verify_installed_cli()?;
     xpc_request("git-helper-version", |message| unsafe {
@@ -373,10 +393,7 @@ fn verify_runtime_at(root: &Path) -> Result<(), String> {
     )?;
     let mut version = Command::new(root.join("bin/git"));
     version.env_clear().arg("--version");
-    if checked(version)?.stdout != REVIEWED_GIT_VERSION {
-        return Err("this Git build has not been reviewed for the protected transport".into());
-    }
-    Ok(())
+    reviewed_git_version(&checked(version)?.stdout)
 }
 
 fn publish_runtime(stage: &Path, destination: &Path) -> Result<(), String> {
