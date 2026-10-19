@@ -702,7 +702,9 @@ requires Approval.
 
 ### Hardened State
 
-The current, verifiable invariants established by a Hardener. Hardened State does not mean fully safe.
+The current, verifiable invariants established by a Hardener. Hardened State does not mean fully safe. Installed hardening status is independent
+of the inspecting process’s PATH. Doctor reports command resolution separately;
+an installed intervention does not imply every shell invokes it.
 
 ### Doctor
 

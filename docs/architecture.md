@@ -58,7 +58,9 @@ cannot change monitoring coverage or machine-readable remediation.
 ### Tool Hardening
 
 Hardeners move supported Tools into a declared Hardened State. Doctor verifies
-the installed intervention and its dependencies. An Isotope supplies an Automic
+the installed intervention and its dependencies. Installed hardening detection
+does not depend on the inspecting process’s PATH; command resolution remains a
+separate Doctor diagnostic, as specified by [ADR 0073](adr/0073-installed-hardening-and-path.md). An Isotope supplies an Automic
 Vault-compatible build or wrapper where upstream behavior cannot support the
 required boundary. Each Automic Vault-maintained Tool fork produces and
 publishes its signed Isotope asset. The signed Isotopes Homebrew tap pins the

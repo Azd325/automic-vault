@@ -83,7 +83,6 @@ pub(crate) fn run(stdout: &mut dyn Write, yes: bool) -> Result<(), String> {
 pub(crate) fn detect() -> HardenerDetection {
     let target = target();
     let target_valid = verify_target(&target).is_ok();
-    let command_resolves = test_config_path().is_some() || verify_command_resolution().is_ok();
     let config = config_path().ok();
     let config_valid = config.as_deref().is_some_and(|path| {
         read_config(path).is_ok_and(|contents| {
@@ -92,7 +91,7 @@ pub(crate) fn detect() -> HardenerDetection {
             })
         })
     });
-    let hardened = target_valid && command_resolves && config_valid;
+    let hardened = target_valid && config_valid;
     let isotope = super::isotope::detect(super::isotope::ALIYUN)
         .commands
         .into_iter()

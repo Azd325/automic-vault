@@ -180,8 +180,8 @@ pub(crate) fn detect(tool: Tool) -> HardenerDetection {
     let target_valid =
         test_config_path().is_some() && target.exists() || verify_target(tool, &target).is_ok();
     let stub_valid = helper_valid(&helper);
-    let command_resolves = test_config_path().is_some() || verify_command_resolution(tool).is_ok();
-    let hardened = config_valid && target_valid && stub_valid && command_resolves;
+    let command_resolves = verify_command_resolution(tool).is_ok();
+    let hardened = config_valid && target_valid && stub_valid;
     let command = HardenerCommand {
         name: tool.command().into(),
         hardened,
@@ -214,7 +214,7 @@ pub(crate) fn detect(tool: Tool) -> HardenerDetection {
             path: Some(target.display().to_string()),
         });
     }
-    if target_valid && !command_resolves && test_config_path().is_none() {
+    if target_valid && !command_resolves {
         detection.diagnostics.push(HardenerDiagnostic {
             kind: "terraform_command_shadowed",
             message: verify_command_resolution(tool).unwrap_err(),
@@ -814,6 +814,20 @@ mod tests {
             fs::read_to_string(&helper).unwrap(),
             crate::cli::terraform_credential::helper_stub()
         );
+        // The fixture Target is outside PATH: installed protection must remain visible.
+        assert!(verify_command_resolution(Tool::Terraform).is_err());
+        let detection = detect(Tool::Terraform);
+        assert!(detection.hardened);
+        assert!(detection.commands[0].hardened);
+        assert!(
+            detection
+                .diagnostics
+                .iter()
+                .any(|issue| issue.kind == "terraform_command_shadowed")
+        );
+        fs::remove_file(&helper).unwrap();
+        assert!(!detect(Tool::Terraform).hardened);
+
         let account = crate::cli::terraform_credential::secret_name("app.terraform.io");
         assert_eq!(
             serde_json::from_slice::<Value>(&fs::read(keychain.join(account)).unwrap()).unwrap(),

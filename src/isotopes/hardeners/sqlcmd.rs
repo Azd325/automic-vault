@@ -81,7 +81,7 @@ pub(crate) fn detect() -> HardenerDetection {
     let config = config_path();
     let config_valid = target_valid
         && (!config.exists() || status(&target, true).is_ok_and(|value| value.hardened));
-    let hardened = target_valid && command_resolves && config_valid;
+    let hardened = target_valid && config_valid;
     let isotope = super::isotope::detect(super::isotope::SQLCMD)
         .commands
         .into_iter()

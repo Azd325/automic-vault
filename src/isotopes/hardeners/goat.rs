@@ -78,7 +78,7 @@ pub(crate) fn detect() -> HardenerDetection {
                 .is_ok_and(|(sanitized, credential)| credential.is_none() && sanitized == contents)
         })
     });
-    let hardened = target_valid && command_resolves && config_valid;
+    let hardened = target_valid && config_valid;
     let isotope = super::isotope::detect(super::isotope::GOAT)
         .commands
         .into_iter()

@@ -102,7 +102,7 @@ pub(crate) fn detect() -> HardenerDetection {
                 })
             })
         });
-    let hardened = target_valid && command_resolves && config_valid;
+    let hardened = target_valid && config_valid;
     let isotope = super::isotope::detect(super::isotope::UAA)
         .commands
         .into_iter()
