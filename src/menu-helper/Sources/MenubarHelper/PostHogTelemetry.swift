@@ -32,6 +32,14 @@ final class PostHogTelemetry: @unchecked Sendable {
         capture("approve")
     }
 
+    func captureVarlockSecretsReleased() {
+        capture("automic_vault_varlock_secrets_released")
+    }
+
+    func captureSecretProxySessionStarted() {
+        capture("automic_vault_secret_proxy_session_started")
+    }
+
     func captureDailyHeartbeat(now: Date = Date()) -> TimeInterval {
         guard let apiKey, apiKey.isEmpty == false else { return DailyHeartbeat.interval }
         let delay = DailyHeartbeat.delay(

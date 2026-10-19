@@ -6202,6 +6202,9 @@ private final class ApprovalServer: @unchecked Sendable {
                                 protocolVersion: varlockProtocolVersion,
                                 humanApprovalDecision: "approved"
                             )
+                            #if !DEBUG
+                            PostHogTelemetry.shared.captureVarlockSecretsReleased()
+                            #endif
                         }
                     ) else {
                         throw AppError("Authorization History is unavailable")
@@ -6442,6 +6445,9 @@ private final class ApprovalServer: @unchecked Sendable {
                         proxySession: material,
                         humanApprovalDecision: "approved"
                     )
+                    #if !DEBUG
+                    PostHogTelemetry.shared.captureSecretProxySessionStarted()
+                    #endif
                 } catch {
                     self.reply(peer, to: message, ok: false, error: error.localizedDescription)
                 }
