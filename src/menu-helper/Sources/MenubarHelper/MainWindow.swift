@@ -486,13 +486,13 @@ final class DashboardModel: ObservableObject {
                 DashboardItem(
                     id: $0.name,
                     title: $0.name,
-                    subtitle: packageStatus(for: $0.name)?.update == "Update available"
-                        ? String(localized: "Update available") : ($0.targetPath ?? "target unknown"),
+                    subtitle: $0.targetPath ?? "target unknown",
                     detail: [
                         $0.stubPath.map { "Stub: \($0)" },
                         $0.targetPath.map { "Target: \($0)" },
                     ].compactMap(\.self).joined(separator: "\n"),
-                    documentation: $0.documentation
+                    documentation: $0.documentation,
+                    isUpdateAvailable: packageStatus(for: $0.name)?.update == "Update available"
                 )
             }
         case .secretGates:
@@ -615,6 +615,7 @@ final class DashboardModel: ObservableObject {
             $0.title.localizedCaseInsensitiveContains(query)
                 || $0.kind?.localizedCaseInsensitiveContains(query) == true
                 || $0.subtitle.localizedCaseInsensitiveContains(query)
+                || ($0.isUpdateAvailable && String(localized: "Update available").localizedCaseInsensitiveContains(query))
                 || $0.blessingStatus?.localizedCaseInsensitiveContains(query) == true
                 || $0.detail.localizedCaseInsensitiveContains(query)
         }
@@ -2683,6 +2684,13 @@ func runDashboardSearchSelfCheck() -> Int32 {
     packageModel.selectSection(.hardenedTools)
     guard packageModel.toolUpdates.map(\.name) == ["aws"],
           packageModel.count(for: .doctor) == 0 else { return 1 }
+    guard packageModel.items.first(where: { $0.title == "aws" })?.subtitle == "/opt/homebrew/bin/aws",
+          packageModel.items.first(where: { $0.title == "gh" })?.subtitle == "/opt/homebrew/bin/gh" else {
+        print("Hardened Tool rows must retain their Target paths when updates are available")
+        return 1
+    }
+    guard packageModel.items.first(where: { $0.title == "aws" })?.isUpdateAvailable == true,
+          packageModel.items.first(where: { $0.title == "gh" })?.isUpdateAvailable == false else { return 1 }
     packageModel.searchText = "Update available"
     guard packageModel.items.map(\.title) == ["aws"] else { return 1 }
     guard managedPackageUpdateScript(names: ["aws", "terraform"])?.contains("__update-managed-packages") == true,
@@ -3371,6 +3379,7 @@ struct DashboardItem: Identifiable, Equatable, Sendable {
     let blessingStatus: String?
     let isTriggered: Bool
     let isHardened: Bool
+    let isUpdateAvailable: Bool
     let date: Date?
 
     var isBuiltInTool: Bool { id == "gpg-signing" || id == "ssh-agent" }
@@ -3379,7 +3388,7 @@ struct DashboardItem: Identifiable, Equatable, Sendable {
         isBuiltInTool ? id : hardenerNameReferencedByDocumentation(documentation) ?? title
     }
 
-    init(id: String, title: String, kind: String? = nil, subtitle: String, detail: String, documentation: String = "", hardenerDocumentation: String? = nil, severity: String? = nil, blessingStatus: String? = nil, isTriggered: Bool = false, isHardened: Bool = false, date: Date? = nil) {
+    init(id: String, title: String, kind: String? = nil, subtitle: String, detail: String, documentation: String = "", hardenerDocumentation: String? = nil, severity: String? = nil, blessingStatus: String? = nil, isTriggered: Bool = false, isHardened: Bool = false, isUpdateAvailable: Bool = false, date: Date? = nil) {
         self.id = id
         self.title = title
         self.kind = kind
@@ -3391,6 +3400,7 @@ struct DashboardItem: Identifiable, Equatable, Sendable {
         self.blessingStatus = blessingStatus
         self.isTriggered = isTriggered
         self.isHardened = isHardened
+        self.isUpdateAvailable = isUpdateAvailable
         self.date = date
     }
 }
@@ -4195,7 +4205,7 @@ private struct DashboardRow: View {
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                     .layoutPriority(1)
-                if item.subtitle == String(localized: "Update available") {
+                if item.isUpdateAvailable {
                     Text("Outdated")
                         .font(.system(size: 10, weight: .bold))
                         .lineLimit(1)
@@ -4245,7 +4255,7 @@ private struct DashboardRow: View {
                                 .foregroundStyle(.tertiary)
                         }
                     }
-                } else if item.subtitle != String(localized: "Update available") {
+                } else {
                     Text(item.subtitle)
                 }
             }
