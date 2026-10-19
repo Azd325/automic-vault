@@ -10,6 +10,7 @@ let automaticApprovalFeedbackDefaultsKey = "automaticApprovalFeedback"
 let compactAutomaticApprovalNotificationsDefaultsKey = "compactAutomaticApprovalNotifications"
 let autoCollapseTemporaryAccessGrantStripDefaultsKey = "autoCollapseTemporaryAccessGrantStrip"
 let keepLauncherAccessForDetachedProcessesDefaultsKey = "keepLauncherAccessForDetachedProcesses"
+let dashboardDidReload = Notification.Name("AutomicVaultDashboardDidReload")
 let cliInstallationDidFinish = Notification.Name("AutomicVaultCLIInstallationDidFinish")
 
 let temporaryAccessGrantStripPresentationDidChange = Notification.Name(
@@ -1093,6 +1094,7 @@ final class DashboardModel: ObservableObject {
             }
             self.launcherBundles = launcherBundles
             hasLoadedInitialSnapshot = true
+            NotificationCenter.default.post(name: dashboardDidReload, object: self)
             normalizeSelection()
         }
     }

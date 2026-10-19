@@ -135,6 +135,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var baseStatusImage: NSImage?
     private var doctorReportCount = 0
     private var outdatedToolCount = 0
+    private var toolAttentionGeneration = 0
     #if !DEBUG
     private let postHogTelemetry = PostHogTelemetry.shared
     private var dailyHeartbeatTask: Task<Void, Never>?
@@ -198,6 +199,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         NotificationCenter.default.addObserver(
             self, selector: #selector(refreshCLIInstallState), name: cliInstallationDidFinish, object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(dashboardReloaded(_:)), name: dashboardDidReload, object: nil
         )
         NotificationCenter.default.addObserver(
             self,
@@ -1114,11 +1118,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         outdatedToolsStatusItem.isHidden = count == 0
     }
 
+    @objc private func dashboardReloaded(_ notification: Notification) {
+        guard let model = notification.object as? DashboardModel,
+              model.hasLoadedInitialSnapshot else { return }
+        toolAttentionGeneration += 1
+        setDoctorStatus(count: model.snapshot.doctorIssues.count)
+        setOutdatedToolsStatus(count: model.toolUpdates.count)
+    }
+
     private func refreshDoctorStatus() {
+        toolAttentionGeneration += 1
+        let generation = toolAttentionGeneration
         scanQueue.async { [weak self] in
             let counts = loadToolAttentionCounts(avExecutableURL: avExecutableURL())
             let reblessingCount = loadBlessedScripts().filter { blessedScriptStatus($0) == "Changed" }.count
             Task { @MainActor in
+                guard self?.toolAttentionGeneration == generation else { return }
                 self?.setDoctorStatus(count: counts.doctor)
                 self?.setOutdatedToolsStatus(count: counts.outdated)
                 self?.setReblessingStatus(count: reblessingCount)
@@ -1685,7 +1700,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         defer { NSStatusBar.system.removeStatusItem(statusItem) }
         guard let menu = statusItem.menu else { return false }
 
-        guard statusOutlineColor == nil else { return false }
+        applicationWillFinishLaunching(Notification(name: NSApplication.willFinishLaunchingNotification))
+        defer {
+            NotificationCenter.default.removeObserver(self)
+            NSWorkspace.shared.notificationCenter.removeObserver(self)
+        }
+        setOutdatedToolsStatus(count: 1)
+        NotificationCenter.default.post(name: dashboardDidReload,
+                                        object: DashboardModel(snapshot: .empty))
+        guard statusOutlineColor == nil else {
+            print("Dashboard refresh left the outdated-tool outline stale")
+            return false
+        }
+        var attentionSnapshot = DashboardSnapshot.empty
+        attentionSnapshot.doctorIssues = [DoctorIssue(hardener: "fixture", kind: "test",
+            message: "Still needs attention", remediation: "Fixture")]
+        NotificationCenter.default.post(name: dashboardDidReload,
+                                        object: DashboardModel(snapshot: attentionSnapshot))
+        guard statusOutlineColor == .systemOrange else { return false }
+        attentionSnapshot.doctorIssues = []
+        attentionSnapshot.hardenedTools = [HardenedTool(name: "fixture", targetPath: "/fixture/tool")]
+        let packageJSON = Data(#"[{"name":"fixture","installation":"Installed","update":"Update available","detail":"Fixture","target_path":"/fixture/tool"}]"#.utf8)
+        guard let packages = try? JSONDecoder().decode([PackageStatus].self, from: packageJSON) else { return false }
+        attentionSnapshot.packages = packages
+        NotificationCenter.default.post(name: dashboardDidReload,
+                                        object: DashboardModel(snapshot: attentionSnapshot))
+        guard statusOutlineColor == .systemOrange, outdatedToolCount == 1 else { return false }
         setDoctorStatus(count: 1)
         guard statusOutlineColor == .systemOrange else { return false }
         setDoctorStatus(count: 0)
@@ -1695,6 +1735,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let data = Data("{\"source\":\"self-check\",\"severity\":\"\(severity)\"}".utf8)
             guard let finding = try? JSONDecoder().decode(DetectorFinding.self, from: data) else { return false }
             latestDetectorFindings = [finding]
+            NotificationCenter.default.post(name: dashboardDidReload,
+                                            object: DashboardModel(snapshot: .empty))
             guard statusOutlineColor == .systemRed else { return false }
         }
         latestDetectorFindings.removeAll()
