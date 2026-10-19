@@ -13,3 +13,5 @@ The fixture preparation script records the temporary model-state substitutions. 
 Build 11 was archived separately from the unmodified production runtime, uploaded through Xcode, and selected in App Store Connect. Its privacy manifest declares Device ID for app functionality, not linked to the user and not used for tracking, matching the existing App Store disclosure.
 
 The website privacy and terms changes are committed in av.www as daf3e4e. Site preparation, translation checks, and 26 input tests passed; static deployment completed. A physical-device purchase and Mac-to-iPhone approval test was not performed during this metadata refresh.
+
+App Store Connect saved build 11 and all nine screenshots. Both subscriptions and their group are in the existing draft (three items). Adding the app version is blocked until App Privacy responses are published. Apple presents an explicit agreement about accuracy, applicable law, and future updates; that agreement awaits user confirmation. No final review submission or release was performed.
