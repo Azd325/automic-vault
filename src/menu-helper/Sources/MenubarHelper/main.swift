@@ -1159,25 +1159,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let outline else { return tinted(image, color: color) }
         let border = tinted(image, color: outline)
         let foreground = tinted(image, color: color ?? .labelColor)
-        let outlineLayer = NSImage(size: image.size, flipped: false) { rect in
-            let inset = rect.insetBy(dx: 1.25, dy: 1.25)
-            for x in [-1.25, 0.0, 1.25] {
-                for y in [-1.25, 0.0, 1.25] {
+        let outlined = NSImage(size: image.size, flipped: false) { rect in
+            let inset = rect.insetBy(dx: 0.75, dy: 0.75)
+            for x in [-0.75, 0.0, 0.75] {
+                for y in [-0.75, 0.0, 0.75] {
                     border.draw(in: inset.offsetBy(dx: x, dy: y))
                 }
             }
-            // Clear a half-point gap so the menu bar shows between shield and outline.
-            for x in [-0.5, 0.0, 0.5] {
-                for y in [-0.5, 0.0, 0.5] {
-                    image.draw(in: inset.offsetBy(dx: x, dy: y), from: .zero,
-                               operation: .destinationOut, fraction: 1)
-                }
-            }
-            return true
-        }
-        let outlined = NSImage(size: image.size, flipped: false) { rect in
-            outlineLayer.draw(in: rect)
-            foreground.draw(in: rect.insetBy(dx: 1.25, dy: 1.25))
+            foreground.draw(in: inset)
             return true
         }
         outlined.isTemplate = false
