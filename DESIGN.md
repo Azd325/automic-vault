@@ -36,7 +36,8 @@ sheets, and rotation/folding without triggering an Approval. See
 `DashboardSidebarView` owns navigation; Packages reuses `DashboardModel` search
 and selection, `DashboardRow`, and the existing `InfoBlock` detail presentation.
 Native SwiftUI owns focus, keyboard navigation, scrollbars, and semantic colors.
-Package rows show installation and update status in text, including unknown and
-failed checks. Details give the existing Hardener command or Homebrew update
-owner. The shared refresh action reloads status; no package action grants
+Package rows include only installed releases managed directly by Automic Vault,
+including installations needing repair. They show installation and update status
+in text, including unknown and failed checks. Details give the existing Hardener
+command. The shared refresh action reloads status; no package action grants
 authority or bypasses the existing installation flow.

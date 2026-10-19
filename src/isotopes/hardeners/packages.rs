@@ -9,6 +9,8 @@ use super::{aws_release, doctl, hcloud, isotope, terraform, terraform_release, u
 #[derive(Serialize)]
 pub(crate) struct PackageStatus {
     name: &'static str,
+    #[serde(skip)]
+    managed: bool,
     installation: &'static str,
     update: &'static str,
     detail: String,
@@ -20,6 +22,7 @@ impl PackageStatus {
         let present = !matches!(fs::symlink_metadata(target), Err(error) if error.kind() == std::io::ErrorKind::NotFound);
         Self {
             name,
+            managed: true,
             installation: if valid {
                 "Installed"
             } else if present {
@@ -31,6 +34,10 @@ impl PackageStatus {
             detail: format!("Run `av harden {name}` to install or repair this package."),
             target_path: target.display().to_string(),
         }
+    }
+
+    fn is_installed_and_managed(&self) -> bool {
+        self.managed && self.installation != "Not installed"
     }
 
     fn update_result(&mut self, result: Result<bool, String>) {
@@ -62,8 +69,9 @@ pub(crate) fn statuses() -> Vec<PackageStatus> {
             let target = isotope::target(spec);
             let valid = isotope::installed(spec, &target);
             let mut package = PackageStatus::new(spec.hardener, &target, valid);
+            package.managed = isotope::is_direct_target(spec, &target);
             if valid {
-                if isotope::is_direct_target(spec, &target) {
+                if package.managed {
                     package.update_result(direct_update(
                         &isotope::receipt_path(spec),
                         || isotope::current_sha(&isotope::formula_url(spec), spec.repository),
@@ -130,10 +138,14 @@ pub(crate) fn statuses() -> Vec<PackageStatus> {
         target,
         terraform::verify_target(terraform::Tool::Terraform, target).is_ok(),
     );
+    // The direct installer writes a regular file, never a package-manager link.
+    package.managed =
+        fs::symlink_metadata(target).is_ok_and(|metadata| metadata.file_type().is_file());
     package
         .detail
         .push_str("\n\nAutomatic update checks are not available for this package.");
     packages.push(package);
+    packages.retain(PackageStatus::is_installed_and_managed);
     packages.sort_by_key(|package| package.name);
     packages
 }
@@ -151,6 +163,19 @@ fn direct_update(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inventory_only_keeps_installed_directly_managed_packages() {
+        let mut package = PackageStatus::new("gh", Path::new("/missing/gh"), true);
+        assert!(package.is_installed_and_managed());
+        package.managed = false;
+        assert!(!package.is_installed_and_managed());
+        package.managed = true;
+        package.installation = "Not installed";
+        assert!(!package.is_installed_and_managed());
+        package.installation = "Needs repair";
+        assert!(package.is_installed_and_managed());
+    }
 
     #[test]
     fn missing_receipt_is_unknown_not_an_available_update() {

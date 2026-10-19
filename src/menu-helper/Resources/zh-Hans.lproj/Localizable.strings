@@ -590,7 +590,7 @@
 "Launcher actions for %@" = "%@ 的启动器操作";
 "Launcher actions" = "启动器操作";
 "Packages" = "软件包";
-"Package status is unavailable. Refresh to try again." = "软件包状态不可用。请刷新重试。";
+"No installed packages are managed directly by Automic Vault." = "没有由 Automic Vault 直接管理的已安装软件包。";
 "Installed" = "已安装";
 "Needs repair" = "需要修复";
 "Not installed" = "未安装";

@@ -708,8 +708,10 @@ The current, verifiable invariants established by a Hardener. Hardened State doe
 
 A verifier for Automic Vault's intervention. Doctor checks declared invariants such as identity, ownership, permissions, dependencies, and command resolution. A Detector evaluates the developer environment; Doctor verifies the protection Automic Vault installed.
 
-The Packages dashboard lists releases installed by Hardeners and reports their
-installation and update status. Available package updates and failed update
+The Packages dashboard lists installed releases managed directly by Automic
+Vault and reports their installation and update status. It excludes absent
+packages and Homebrew-managed installations. Installed packages needing repair
+remain visible. Available package updates and failed update
 checks are not Doctor findings; broken protection invariants remain Doctor
 findings even when repair requires reinstalling a package. Package status is
 diagnostic information and never grants authority.

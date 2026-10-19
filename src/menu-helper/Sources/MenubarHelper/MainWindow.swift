@@ -4128,7 +4128,7 @@ private struct EmptyListView: View {
         switch section {
         case .overview: String(localized: "Review your Tools and configuration")
         case .detectors: String(localized: "Detectors identify developer tool configurations that could expose secrets")
-        case .packages: String(localized: "Package status is unavailable. Refresh to try again.")
+        case .packages: String(localized: "No installed packages are managed directly by Automic Vault.")
         case .doctor: String(localized: "Doctor identifies problems with your Automic Vault installation and explains how to fix them")
         case .hardenedTools: String(localized: "Hardened Tools secure developer tools with granular access to secrets")
         case .secretGates: String(localized: "Authorization Gates control which operations Verified Launchers may perform through specific Tools")

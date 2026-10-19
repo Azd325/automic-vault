@@ -590,7 +590,7 @@
 "Launcher actions for %@" = "Launcher actions for %@";
 "Launcher actions" = "Launcher actions";
 "Packages" = "Packages";
-"Package status is unavailable. Refresh to try again." = "Package status is unavailable. Refresh to try again.";
+"No installed packages are managed directly by Automic Vault." = "No installed packages are managed directly by Automic Vault.";
 "Installed" = "Installed";
 "Needs repair" = "Needs repair";
 "Not installed" = "Not installed";
