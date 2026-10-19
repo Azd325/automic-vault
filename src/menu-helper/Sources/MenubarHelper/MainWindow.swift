@@ -127,7 +127,6 @@ final class AutomicVaultMainWindowController: NSHostingController<DashboardRootV
             checkForUpdates: checkForUpdates,
             requestScan: requestScan
         ))
-        configureScrollBackground()
     }
 
     @MainActor @preconcurrency required dynamic init?(coder: NSCoder) {
@@ -136,16 +135,6 @@ final class AutomicVaultMainWindowController: NSHostingController<DashboardRootV
             checkForUpdates: {},
             requestScan: {}
         ))
-        configureScrollBackground()
-    }
-
-    private func configureScrollBackground() {
-        if #available(macOS 27, *) {
-            rootView.onListScrollChange = { [weak self] isScrolled in
-                self?.view.window?.titlebarAppearsTransparent = !isScrolled
-                self?.view.window?.titlebarSeparatorStyle = isScrolled ? .automatic : .none
-            }
-        }
     }
 
     override func viewDidAppear() {
@@ -3464,7 +3453,6 @@ struct DashboardRootView: View {
     @State private var secretToDelete: StoredSecret?
     let checkForUpdates: () -> Void
     let requestScan: () -> Void
-    var onListScrollChange: (Bool) -> Void = { _ in }
 
     @ToolbarContentBuilder
     private var cliInstallToolbar: some ToolbarContent {
@@ -3560,7 +3548,66 @@ struct DashboardRootView: View {
         }
     }
 
+    @ViewBuilder
+    private var listActions: some View {
+        if model.selectedSection == .hardenedTools {
+            Button("Update All") { model.updateTools(model.toolUpdates.map(\.name)) }
+                .disabled(model.toolUpdates.isEmpty || model.isUpdatingTools
+                    || model.isReloading || model.cliInstallState != .current)
+        }
+        if model.selectedSection == .allSecrets {
+            Button { model.isAddingSecret = true } label: {
+                Label("Add Secret", systemImage: "plus")
+            }
+            .labelStyle(.iconOnly)
+            .help("Add Secret")
+        }
+        if model.selectedSection == .launcherBundles {
+            Button { model.isCreatingLauncherBundle = true } label: {
+                Label("Create Launcher Bundle", systemImage: "plus")
+            }
+            .labelStyle(.iconOnly)
+            .help("Create Launcher Bundle")
+        }
+    }
+
+    @ViewBuilder
+    private var listColumn: some View {
+        if #available(macOS 27, *) {
+            DashboardListView(model: model)
+                .safeAreaBar(edge: .top, spacing: 0) {
+                    HStack {
+                        Text(model.selectedSection.title)
+                            .font(.headline)
+                            .lineLimit(1)
+                        Spacer(minLength: 8)
+                        listActions
+                            .buttonStyle(.glass)
+                            .buttonBorderShape(.capsule)
+                            .controlSize(.large)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .frame(minHeight: 52)
+                }
+                .scrollEdgeEffectStyle(.automatic, for: .top)
+                .ignoresSafeArea(.container, edges: .top)
+        } else {
+            DashboardListView(model: model)
+                .toolbar { ToolbarItemGroup { listActions } }
+        }
+    }
+
+    @ViewBuilder
     var body: some View {
+        if #available(macOS 27, *), model.selectedSection != .overview {
+            content.toolbar(removing: .title)
+        } else {
+            content
+        }
+    }
+
+    private var content: some View {
         Group {
             if model.selectedSection == .overview {
                 NavigationSplitView {
@@ -3586,43 +3633,8 @@ struct DashboardRootView: View {
             DashboardSidebarView(model: model)
                 .navigationSplitViewColumnWidth(min: 186, ideal: 227, max: 250)
         } content: {
-            DashboardListView(model: model, onScrollChange: onListScrollChange)
+            listColumn
                 .navigationSplitViewColumnWidth(min: 168, ideal: 255)
-                .toolbar {
-                    if #available(macOS 27, *),
-                       model.selectedSection == .allSecrets || model.selectedSection == .launcherBundles {
-                        ToolbarSpacer(.flexible)
-                    }
-                    if model.selectedSection == .hardenedTools {
-                        ToolbarItem {
-                            Button("Update All") { model.updateTools(model.toolUpdates.map(\.name)) }
-                                .disabled(model.toolUpdates.isEmpty || model.isUpdatingTools
-                                    || model.isReloading || model.cliInstallState != .current)
-                        }
-                    }
-                    if model.selectedSection == .allSecrets {
-                        ToolbarItem {
-                            Button {
-                                model.isAddingSecret = true
-                            } label: {
-                                Label("Add Secret", systemImage: "plus")
-                            }
-                            .labelStyle(.iconOnly)
-                            .help("Add Secret")
-                        }
-                    }
-                    if model.selectedSection == .launcherBundles {
-                        ToolbarItem {
-                            Button {
-                                model.isCreatingLauncherBundle = true
-                            } label: {
-                                Label("Create Launcher Bundle", systemImage: "plus")
-                            }
-                            .labelStyle(.iconOnly)
-                            .help("Create Launcher Bundle")
-                        }
-                    }
-                }
         } detail: {
             DashboardDetailView(model: model)
                 .toolbar { cliInstallToolbar }
@@ -3806,7 +3818,6 @@ private struct DashboardSidebarView: View {
 
 private struct DashboardListView: View {
     @ObservedObject var model: DashboardModel
-    let onScrollChange: (Bool) -> Void
     @FocusState private var isFocused: Bool
 
     var body: some View {
@@ -3883,7 +3894,6 @@ private struct DashboardListView: View {
         .onChange(of: model.selectedSection, initial: true) { _, _ in
             isFocused = true
         }
-        .onDisappear { onScrollChange(false) }
     }
 
     private var itemSelection: Binding<String?> {
@@ -3926,13 +3936,6 @@ private struct DashboardListView: View {
 
         if #available(macOS 27, *) {
             list
-                .scrollEdgeEffectStyle(.hard, for: .top)
-                .onScrollGeometryChange(for: Bool.self) { geometry in
-                    geometry.contentOffset.y + geometry.contentInsets.top > 0
-                } action: { _, isScrolled in
-                    onScrollChange(isScrolled)
-                }
-                .onDisappear { onScrollChange(false) }
         } else {
             list.overlay(alignment: .top) {
                 Rectangle()
