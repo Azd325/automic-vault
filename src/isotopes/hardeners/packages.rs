@@ -141,9 +141,11 @@ pub(crate) fn statuses() -> Vec<PackageStatus> {
     // The direct installer writes a regular file, never a package-manager link.
     package.managed =
         fs::symlink_metadata(target).is_ok_and(|metadata| metadata.file_type().is_file());
-    package
-        .detail
-        .push_str("\n\nAutomatic update checks are not available for this package.");
+    if package.managed && package.installation == "Installed" {
+        package.update_result(
+            terraform_release::update_version(target).map(|version| version.is_some()),
+        );
+    }
     packages.push(package);
     packages.retain(PackageStatus::is_installed_and_managed);
     packages.sort_by_key(|package| package.name);

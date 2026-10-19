@@ -60,10 +60,19 @@ pub(crate) fn run(tool: Tool, stdout: &mut dyn Write, yes: bool) -> Result<(), S
         Tool::Terraform => None,
         Tool::OpenTofu => Some(super::isotope::plan(super::isotope::OPENTOFU)?),
     };
+    let terraform_version = if !testing && tool == Tool::Terraform {
+        if verify_target(tool, &tool.target()).is_ok() {
+            super::terraform_release::update_version(&tool.target())?
+        } else {
+            Some(super::terraform_release::latest_version()?)
+        }
+    } else {
+        None
+    };
     let target_ready = testing
         || match &isotope_plan {
             Some(plan) => !plan.needed(),
-            None => verify_target(tool, &tool.target()).is_ok(),
+            None => terraform_version.is_none(),
         };
     let brew_conflict = !testing && tool == Tool::Terraform && homebrew_formula_installed(tool);
     refuse_competing_config(tool)?;
@@ -79,7 +88,10 @@ pub(crate) fn run(tool: Tool, stdout: &mut dyn Write, yes: bool) -> Result<(), S
         match tool {
             Tool::Terraform => writeln!(
                 stdout,
-                "├─ download and install HashiCorp's signed native Terraform release"
+                "├─ download and install HashiCorp's signed native Terraform {}",
+                terraform_version
+                    .as_deref()
+                    .expect("Terraform release plan")
             ),
             Tool::OpenTofu => {
                 isotope_plan
@@ -112,7 +124,11 @@ pub(crate) fn run(tool: Tool, stdout: &mut dyn Write, yes: bool) -> Result<(), S
     if !target_ready {
         match isotope_plan {
             Some(plan) => plan.apply(super::isotope::OPENTOFU)?,
-            None => install_terraform_target()?,
+            None => install_terraform_target(
+                terraform_version
+                    .as_deref()
+                    .expect("Terraform release plan"),
+            )?,
         }
         verify_target(tool, &tool.target())?;
     }
@@ -469,10 +485,10 @@ fn install_helper() -> Result<(), String> {
     result
 }
 
-fn install_terraform_target() -> Result<(), String> {
+fn install_terraform_target(version: &str) -> Result<(), String> {
     let temporary = TemporaryDirectory::new("terraform-release")?;
     let archive = temporary.path.join("terraform.zip");
-    let digest = super::terraform_release::download(&archive)?;
+    let digest = super::terraform_release::download(version, &archive)?;
     super::env_wrapper::validate_privileged_av(Path::new(AV_PATH))?;
     let revision = Command::new(AV_PATH)
         .arg("__version")

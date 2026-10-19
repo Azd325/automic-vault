@@ -3,7 +3,7 @@ use std::io::Read;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
@@ -13,9 +13,84 @@ const MAX_INDEX_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_ARCHIVE_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_BINARY_BYTES: u64 = 256 * 1024 * 1024;
 
-pub(crate) fn download(destination: &Path) -> Result<String, String> {
-    let index = fetch(INDEX_URL, MAX_INDEX_BYTES, Duration::from_secs(15))?;
-    let version = latest_stable_version(&index)?;
+pub(crate) fn latest_version() -> Result<String, String> {
+    let index = fetch(INDEX_URL, MAX_INDEX_BYTES, Duration::from_secs(5))?;
+    latest_stable_version(&index)
+}
+
+pub(crate) fn update_version(target: &Path) -> Result<Option<String>, String> {
+    let installed = current_version(target)?;
+    let latest = latest_version()?;
+    update_available(&installed, &latest).map(|available| available.then_some(latest))
+}
+
+fn update_available(installed: &str, latest: &str) -> Result<bool, String> {
+    let installed = version_key(installed).ok_or("invalid installed Terraform version")?;
+    let latest = version_key(latest).ok_or("invalid latest Terraform version")?;
+    Ok(latest > installed)
+}
+
+fn current_version(target: &Path) -> Result<String, String> {
+    // Never execute an unverified Target, inherit credentials, or load project configuration.
+    super::terraform::verify_target(super::terraform::Tool::Terraform, target)?;
+    let mut child = Command::new(target)
+        .args(["version", "-json"])
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+        .env("HOME", "/var/empty")
+        .env("TF_CLI_CONFIG_FILE", "/dev/null")
+        .env("CHECKPOINT_DISABLE", "1")
+        .current_dir("/var/empty")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| format!("failed to read installed Terraform version: {error}"))?;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
+            result => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(match result {
+                    Err(error) => format!("failed to read installed Terraform version: {error}"),
+                    _ => "installed Terraform version check timed out".into(),
+                });
+            }
+        }
+    };
+    if !status.success() {
+        return Err("installed Terraform version check failed".into());
+    }
+    let mut output = Vec::new();
+    child
+        .stdout
+        .take()
+        .expect("piped stdout")
+        .take(16 * 1024 + 1)
+        .read_to_end(&mut output)
+        .map_err(|error| format!("failed to read installed Terraform version: {error}"))?;
+    if output.len() > 16 * 1024 {
+        return Err("installed Terraform version output is too large".into());
+    }
+    installed_version(&output)
+}
+
+fn installed_version(output: &[u8]) -> Result<String, String> {
+    let value: Value = serde_json::from_slice(output)
+        .map_err(|error| format!("invalid Terraform version output: {error}"))?;
+    let version = value
+        .get("terraform_version")
+        .and_then(Value::as_str)
+        .filter(|version| version_key(version).is_some())
+        .ok_or("Terraform did not report a stable version")?;
+    Ok(version.into())
+}
+
+pub(crate) fn download(version: &str, destination: &Path) -> Result<String, String> {
+    version_key(version).ok_or("invalid Terraform release version")?;
     let url = format!(
         "https://releases.hashicorp.com/terraform/{version}/terraform_{version}_darwin_arm64.zip"
     );
@@ -132,6 +207,12 @@ fn latest_stable_version(index: &str) -> Result<String, String> {
 }
 
 fn version_key(version: &str) -> Option<(u64, u64, u64)> {
+    if !version
+        .bytes()
+        .all(|byte| byte.is_ascii_digit() || byte == b'.')
+    {
+        return None;
+    }
     let mut parts = version.split('.');
     let key = (
         parts.next()?.parse().ok()?,
@@ -228,6 +309,106 @@ mod tests {
     }
 
     #[test]
+    fn update_comparison_never_downgrades_or_accepts_invalid_versions() {
+        assert_eq!(update_available("1.9.9", "1.10.0"), Ok(true));
+        assert_eq!(update_available("1.10.0", "1.10.0"), Ok(false));
+        assert_eq!(update_available("1.11.0", "1.10.0"), Ok(false));
+        for invalid in ["1.11.0-rc1", "../1.2.3", "+1.2.3", "1.2", "1.2.3.4", ""] {
+            assert!(update_available(invalid, "1.10.0").is_err());
+            assert!(update_available("1.10.0", invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn version_output_requires_a_stable_terraform_version() {
+        assert_eq!(
+            installed_version(br#"{"terraform_version":"1.10.2","platform":"darwin_arm64"}"#),
+            Ok("1.10.2".into())
+        );
+        for output in [
+            br#"{}"#.as_slice(),
+            br#"{"terraform_version":"1.11.0-beta1"}"#,
+            b"not JSON",
+        ] {
+            assert!(installed_version(output).is_err());
+        }
+    }
+
+    #[test]
+    fn version_check_rejects_unverified_code_without_executing_it() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "av-terraform-version-{}",
+            super::super::isotope::now_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let target = root.join("terraform");
+        fs::write(
+            &target,
+            format!("#!/bin/sh\ntouch '{}'\n", root.join("executed").display()),
+        )
+        .unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(current_version(&target).is_err());
+        assert!(!root.join("executed").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn update_check_uses_isolated_version_output_and_propagates_metadata_errors() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "av-terraform-check-{}",
+            super::super::isotope::now_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let target = root.join("terraform");
+        fs::write(
+            &target,
+            r#"#!/bin/sh
+[ "$1 $2" = "version -json" ] || exit 1
+case "$PWD" in /var/empty|/private/var/empty) ;; *) exit 2 ;; esac
+[ "$HOME" = /var/empty ] || exit 3
+[ "$TF_CLI_CONFIG_FILE" = /dev/null ] || exit 4
+[ "$CHECKPOINT_DISABLE" = 1 ] || exit 5
+[ -z "$TF_TOKEN_example_com" ] || exit 6
+printf '%s' '{"terraform_version":"1.9.9"}'
+"#,
+        )
+        .unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o755)).unwrap();
+        unsafe {
+            std::env::set_var("AUTOMIC_VAULT_TEST_TERRAFORM_CONFIG", root.join("config"));
+            std::env::set_var("TF_TOKEN_example_com", "test-must-not-be-inherited");
+            std::env::set_var(
+                "AUTOMIC_VAULT_TEST_TERRAFORM_RELEASE_INDEX",
+                r#"{"versions":{"1.10.0":{},"2.0.0-rc1":{}}}"#,
+            );
+        }
+        let newer = update_version(&target);
+        unsafe {
+            std::env::set_var(
+                "AUTOMIC_VAULT_TEST_TERRAFORM_RELEASE_INDEX",
+                r#"{"versions":{"1.9.9":{}}}"#,
+            );
+        }
+        let current = update_version(&target);
+        unsafe {
+            std::env::set_var("AUTOMIC_VAULT_TEST_TERRAFORM_RELEASE_INDEX", "invalid");
+        }
+        let failed = update_version(&target);
+        unsafe {
+            std::env::remove_var("AUTOMIC_VAULT_TEST_TERRAFORM_CONFIG");
+            std::env::remove_var("AUTOMIC_VAULT_TEST_TERRAFORM_RELEASE_INDEX");
+            std::env::remove_var("TF_TOKEN_example_com");
+        }
+        fs::remove_dir_all(root).unwrap();
+        assert_eq!(newer, Ok(Some("1.10.0".into())));
+        assert_eq!(current, Ok(None));
+        assert!(failed.is_err());
+    }
+
+    #[test]
     fn installer_rejects_an_unsigned_binary_before_replacing_the_target() {
         let _guard = crate::global_test_env_lock().lock().unwrap();
         let root = std::env::temp_dir().join(format!(
@@ -250,6 +431,8 @@ mod tests {
             .unwrap();
         assert!(status.success());
         let digest = super::super::isotope::sha256_file(&archive).unwrap();
+        fs::create_dir_all(&destination).unwrap();
+        fs::write(destination.join("terraform"), "existing installation").unwrap();
         unsafe {
             std::env::set_var("AUTOMIC_VAULT_TEST_TERRAFORM_INSTALL_DIR", &destination);
             std::env::set_var("AUTOMIC_VAULT_TEST_ISOTOPE_DIRECT_DIR", &destination);
@@ -260,7 +443,10 @@ mod tests {
             std::env::remove_var("AUTOMIC_VAULT_TEST_ISOTOPE_DIRECT_DIR");
         }
         assert!(error.contains("Target signature is invalid"));
-        assert!(!destination.join("terraform").exists());
+        assert_eq!(
+            fs::read_to_string(destination.join("terraform")).unwrap(),
+            "existing installation"
+        );
         let _ = fs::remove_dir_all(root);
     }
 }
