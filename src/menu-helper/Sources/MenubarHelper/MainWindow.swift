@@ -484,7 +484,7 @@ final class DashboardModel: ObservableObject {
         case .hardenedTools:
             snapshot.hardenedTools.map {
                 DashboardItem(
-                    id: $0.stubPath ?? $0.name,
+                    id: $0.name,
                     title: $0.name,
                     subtitle: packageStatus(for: $0.name)?.update == "Update available"
                         ? String(localized: "Update available") : ($0.targetPath ?? "target unknown"),
@@ -1866,7 +1866,7 @@ final class DashboardModel: ObservableObject {
         }
         var rows = snapshot.hardenedTools.map { tool in
             if let finding = findings[tool.name]?.first { return finding }
-            return DashboardItem(id: tool.stubPath ?? tool.name, title: tool.name,
+            return DashboardItem(id: tool.name, title: tool.name,
                                  subtitle: "Hardened", detail: "", isHardened: true)
         }
         let hardenedNames = Set(snapshot.hardenedTools.map(\.name))
@@ -2384,6 +2384,30 @@ func runUpdateToolbarSelfCheck() -> Int32 {
 
 @MainActor
 func runDashboardSearchSelfCheck() -> Int32 {
+    // Terraform and OpenTofu share a credential helper, but remain separate Tools.
+    var sharedHelperSnapshot = DashboardSnapshot.empty
+    sharedHelperSnapshot.hardenedTools = [
+        HardenedTool(name: "opentofu", stubPath: "/fixture/terraform-credentials-av", targetPath: "/fixture/tofu"),
+        HardenedTool(name: "terraform", stubPath: "/fixture/terraform-credentials-av", targetPath: "/fixture/terraform"),
+    ]
+    let sharedHelperModel = DashboardModel(snapshot: sharedHelperSnapshot)
+    sharedHelperModel.selectSection(.hardenedTools)
+    let sharedHelperRows = sharedHelperModel.items
+    guard Set(sharedHelperRows.map(\.id)).count == 2 else {
+        print("Hardened Tools sharing a helper must have distinct row identities")
+        return 1
+    }
+    for tool in sharedHelperSnapshot.hardenedTools {
+        guard let overviewRow = sharedHelperModel.overviewTools.first(where: { $0.title == tool.name }) else { return 1 }
+        sharedHelperModel.openOverviewTool(overviewRow)
+        guard sharedHelperModel.selectedSection == .hardenedTools,
+              sharedHelperModel.selectedItem?.title == tool.name,
+              sharedHelperModel.selectedItem?.detail.contains("Target: \(tool.targetPath!)") == true
+        else {
+            print("Shared helper navigation selected the wrong Tool: \(tool.name)")
+            return 1
+        }
+    }
     guard !DashboardModel().hasLoadedInitialSnapshot,
           DashboardModel(snapshot: .empty).hasLoadedInitialSnapshot else { return 1 }
     // History navigation must bind the exact Gate and current Launcher identity,
@@ -2732,8 +2756,8 @@ func runDashboardSearchSelfCheck() -> Int32 {
         model.navigateFromOverview(to: section)
         guard model.selectedSection == section, model.searchText.isEmpty else { return 1 }
     }
-    model.navigateFromOverview(to: .hardenedTools, itemID: "/usr/local/bin/gh")
-    guard model.selectedItemID == "/usr/local/bin/gh" else { return 1 }
+    model.navigateFromOverview(to: .hardenedTools, itemID: "gh")
+    guard model.selectedItemID == "gh" else { return 1 }
     model.navigateFromOverview(to: .hardenedTools, itemID: "missing")
     guard model.selectedItemID != "missing" else { return 1 }
     model.navigateFromOverview(to: .overview)
