@@ -133,6 +133,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var liveSecretUseSeparator: NSMenuItem?
     private var liveSecretUseTimer: Timer?
     private var baseStatusImage: NSImage?
+    private var doctorReportCount = 0
+    private var outdatedToolCount = 0
     #if !DEBUG
     private let postHogTelemetry = PostHogTelemetry.shared
     private var dailyHeartbeatTask: Task<Void, Never>?
@@ -1039,18 +1041,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             #endif
             if latestDetectorFindings.isEmpty {
-                setBaseStatusImage(brandImage())
                 setScanStatus(
                     String(localized: "No Vulnerabilities Detected"),
                     image: shieldImage(symbolName: "shield.fill", color: .systemGreen)
                 )
             } else {
                 let level = scanAlertLevel(latestDetectorFindings.map(\.severity))
-                let image = switch level {
-                case .medium: brandImage()
-                case .high: brandImage(color: .systemRed)
-                }
-                setBaseStatusImage(image)
                 setScanStatus(
                     vulnerabilityStatusTitle(count: count),
                     image: shieldImage(color: level.color),
@@ -1066,9 +1062,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         // A successful unrelated partial scan cannot certify a failed check.
         if fullScanFailed || !failedScanDetectors.isEmpty {
-            setBaseStatusImage(brandImage(color: .systemRed))
             setScanStatus(String(localized: "Scan failed"), image: shieldImage(color: .systemRed))
         }
+        refreshStatusImage()
         if scanWorkItem == nil, pendingFullScan || !pendingScanDetectors.isEmpty {
             runPendingScan()
         }
@@ -1093,6 +1089,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func setDoctorStatus(count: Int) {
+        doctorReportCount = count
+        refreshStatusImage()
         guard !isStatusMenuOpen else { return }
         guard let title = doctorStatusTitle(count: count) else {
             doctorStatusItem.isHidden = true
@@ -1109,6 +1107,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func setOutdatedToolsStatus(count: Int) {
+        outdatedToolCount = count
+        refreshStatusImage()
         guard !isStatusMenuOpen else { return }
         outdatedToolsStatusItem.title = outdatedToolsStatusTitle(count: count) ?? ""
         outdatedToolsStatusItem.isHidden = count == 0
@@ -1137,12 +1137,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func brandImage(color: NSColor? = nil) -> NSImage? {
+    private var statusOutlineColor: NSColor? {
+        if fullScanFailed || !failedScanDetectors.isEmpty || !latestDetectorFindings.isEmpty {
+            return .systemRed
+        }
+        return doctorReportCount > 0 || outdatedToolCount > 0 ? .systemOrange : nil
+    }
+
+    private func refreshStatusImage() {
+        baseStatusImage = brandImage(outline: statusOutlineColor)
+        statusItem.button?.image = temporaryAccessGrantSnapshots.isEmpty
+            ? baseStatusImage
+            : brandImage(color: .systemOrange, outline: statusOutlineColor)
+    }
+
+    private func brandImage(color: NSColor? = nil, outline: NSColor? = nil) -> NSImage? {
         let fallback = NSImage(systemSymbolName: "shield.fill", accessibilityDescription: "Automic Vault")
         guard let image = Bundle.main.url(forResource: "NSMenuItem", withExtension: "png")
             .flatMap(NSImage.init(contentsOf:)) ?? fallback else { return nil }
         image.size = NSSize(width: 15, height: 18)
-        return tinted(image, color: color)
+        guard let outline else { return tinted(image, color: color) }
+        let border = tinted(image, color: outline)
+        let foreground = tinted(image, color: color ?? .labelColor)
+        let outlined = NSImage(size: image.size, flipped: false) { rect in
+            let inset = rect.insetBy(dx: 0.75, dy: 0.75)
+            for x in [-0.75, 0.0, 0.75] {
+                for y in [-0.75, 0.0, 0.75] {
+                    border.draw(in: inset.offsetBy(dx: x, dy: y))
+                }
+            }
+            foreground.draw(in: inset)
+            return true
+        }
+        outlined.isTemplate = false
+        return outlined
     }
 
     private func dimmed(_ image: NSImage, side: AutomaticApprovalFlashSide) -> NSImage {
@@ -1306,9 +1334,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         refreshTemporaryAccessGrantMenuItems()
         refreshTemporaryAccessGrantPanel()
-        statusItem.button?.image = temporaryAccessGrantSnapshots.isEmpty
-            ? (baseStatusImage ?? brandImage())
-            : brandImage(color: .systemOrange)
+        refreshStatusImage()
     }
 
     private func refreshTemporaryAccessGrantMenuItems() {
@@ -1618,13 +1644,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refreshTemporaryAccessGrantMenuItems()
     }
 
-    private func setBaseStatusImage(_ image: NSImage?) {
-        baseStatusImage = image
-        if temporaryAccessGrantSnapshots.isEmpty {
-            statusItem.button?.image = image
-        }
-    }
-
     fileprivate func autoApprovalMenuItem(_ group: AutoApprovalGroup) -> NSMenuItem {
         guard group.count > 1 else { return autoApprovalMenuItem(group.record) }
         let item = NSMenuItem(
@@ -1665,6 +1684,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         installStatusMenu()
         defer { NSStatusBar.system.removeStatusItem(statusItem) }
         guard let menu = statusItem.menu else { return false }
+
+        guard statusOutlineColor == nil else { return false }
+        setDoctorStatus(count: 1)
+        guard statusOutlineColor == .systemOrange else { return false }
+        setDoctorStatus(count: 0)
+        setOutdatedToolsStatus(count: 1)
+        guard statusOutlineColor == .systemOrange else { return false }
+        for severity in ["medium", "high"] {
+            let data = Data("{\"source\":\"self-check\",\"severity\":\"\(severity)\"}".utf8)
+            guard let finding = try? JSONDecoder().decode(DetectorFinding.self, from: data) else { return false }
+            latestDetectorFindings = [finding]
+            guard statusOutlineColor == .systemRed else { return false }
+        }
+        latestDetectorFindings.removeAll()
+        fullScanFailed = true
+        guard statusOutlineColor == .systemRed else { return false }
+        fullScanFailed = false
+        failedScanDetectors.insert("self-check")
+        guard statusOutlineColor == .systemRed else { return false }
+        failedScanDetectors.removeAll()
+        setOutdatedToolsStatus(count: 0)
+        guard statusOutlineColor == nil, baseStatusImage?.isTemplate == true,
+              brandImage(outline: .systemRed)?.isTemplate == false else { return false }
 
         setOutdatedToolsStatus(count: 2)
         guard outdatedToolsStatusItem.title == "2 outdated hardened tools",
