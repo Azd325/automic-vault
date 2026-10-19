@@ -3731,10 +3731,8 @@ private struct DashboardSidebarView: View {
                         color: detectorSeverityLevel(model.snapshot.detectorFindings.map(\.severity)).color
                     )
                         .fixedSize()
-                } else if section == .hardenedTools,
-                          !model.toolUpdates.isEmpty,
-                          model.selectedSection != .hardenedTools {
-                    DetectorCountPill(count: count, color: .orange)
+                } else if section == .hardenedTools, !model.toolUpdates.isEmpty {
+                    DetectorCountPill(count: model.toolUpdates.count, color: .orange)
                         .fixedSize()
                 } else if section == .doctor, model.selectedSection != .doctor {
                     DetectorCountPill(count: count, color: DetectorSeverityLevel.high.color)
