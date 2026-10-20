@@ -3571,13 +3571,42 @@ public func loadSecretGateDescriptors(avExecutableURL: URL) throws -> [SecretGat
     return try secretGateDescriptors(from: data)
 }
 
-public func loadToolAttentionCounts(avExecutableURL: URL) -> (doctor: Int, outdated: Int) {
+// Presentation data shared by the status menu and dashboard; never used for authorization.
+public struct ToolStatusSnapshot: Sendable {
+    public let hardenedTools: [HardenedTool]
+    public let hardeners: [HardenerMetadata]
+    public let packages: [PackageStatus]
+    public let doctorIssues: [DoctorIssue]
+
+    public init(snapshot: DashboardSnapshot) {
+        hardenedTools = snapshot.hardenedTools
+        hardeners = snapshot.hardeners
+        packages = snapshot.packages
+        doctorIssues = snapshot.doctorIssues
+    }
+
+    public var outdatedCount: Int {
+        let hardened = Set(hardenedTools.map(\.name))
+        return packages.filter { hardened.contains($0.name) && $0.update == "Update available" }.count
+    }
+
+    public func apply(to snapshot: inout DashboardSnapshot) {
+        snapshot.hardenedTools = hardenedTools
+        snapshot.hardeners = hardeners
+        snapshot.packages = packages
+        snapshot.doctorIssues = doctorIssues
+    }
+}
+
+public func loadToolStatusSnapshot(avExecutableURL: URL) -> ToolStatusSnapshot {
     let report = loadDashboardHardening(avExecutableURL: avExecutableURL)
-    let hardened = Set(report.hardeners.filter(\.hardened).map(\.name))
-    let outdated = report.packages.filter {
-        hardened.contains($0.name) && $0.update == "Update available"
-    }.count
-    return (report.doctorIssues.count, outdated)
+    var snapshot = DashboardSnapshot.empty
+    snapshot.hardenedTools = loadHardenedTools(
+        in: URL(fileURLWithPath: "/usr/local/bin"), metadata: report.hardeners)
+    snapshot.hardeners = report.hardeners
+    snapshot.packages = report.packages
+    snapshot.doctorIssues = report.doctorIssues
+    return ToolStatusSnapshot(snapshot: snapshot)
 }
 
 public func loadDoctorIssues(avExecutableURL: URL) -> [DoctorIssue] {

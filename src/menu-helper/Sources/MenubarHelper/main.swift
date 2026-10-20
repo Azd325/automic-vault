@@ -135,6 +135,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var baseStatusImage: NSImage?
     private var doctorReportCount = 0
     private var outdatedToolCount = 0
+    private var latestToolStatus: ToolStatusSnapshot?
     private var toolAttentionGeneration = 0
     #if !DEBUG
     private let postHogTelemetry = PostHogTelemetry.shared
@@ -756,6 +757,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let controller = AutomicVaultMainWindowController(
+            toolStatus: latestToolStatus,
             checkForUpdates: { [weak self] in self?.checkForUpdates() },
             requestScan: { [weak self] in self?.scheduleScan(after: 0) }
         )
@@ -1122,20 +1124,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let model = notification.object as? DashboardModel,
               model.hasLoadedInitialSnapshot else { return }
         toolAttentionGeneration += 1
-        setDoctorStatus(count: model.snapshot.doctorIssues.count)
-        setOutdatedToolsStatus(count: model.toolUpdates.count)
+        publishToolStatus(ToolStatusSnapshot(snapshot: model.snapshot))
+    }
+
+    private func publishToolStatus(_ status: ToolStatusSnapshot) {
+        latestToolStatus = status
+        (mainWindow?.contentViewController as? AutomicVaultMainWindowController)?.updateToolStatus(status)
+        setDoctorStatus(count: status.doctorIssues.count)
+        setOutdatedToolsStatus(count: status.outdatedCount)
     }
 
     private func refreshDoctorStatus() {
         toolAttentionGeneration += 1
         let generation = toolAttentionGeneration
         scanQueue.async { [weak self] in
-            let counts = loadToolAttentionCounts(avExecutableURL: avExecutableURL())
+            let status = loadToolStatusSnapshot(avExecutableURL: avExecutableURL())
             let reblessingCount = loadBlessedScripts().filter { blessedScriptStatus($0) == "Changed" }.count
             Task { @MainActor in
                 guard self?.toolAttentionGeneration == generation else { return }
-                self?.setDoctorStatus(count: counts.doctor)
-                self?.setOutdatedToolsStatus(count: counts.outdated)
+                self?.publishToolStatus(status)
                 self?.setReblessingStatus(count: reblessingCount)
             }
         }
@@ -1726,6 +1733,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NotificationCenter.default.post(name: dashboardDidReload,
                                         object: DashboardModel(snapshot: attentionSnapshot))
         guard statusOutlineColor == .systemOrange, outdatedToolCount == 1 else { return false }
+        let controller = AutomicVaultMainWindowController(
+            toolStatus: latestToolStatus, checkForUpdates: {}, requestScan: {})
+        guard controller.rootView.model.toolUpdates == packages,
+              controller.rootView.model.snapshot.hardenedTools == attentionSnapshot.hardenedTools,
+              !controller.rootView.model.hasLoadedInitialSnapshot else {
+            print("Window did not immediately inherit the menu's Tool status")
+            return false
+        }
+        let statusWindow = NSWindow()
+        statusWindow.contentViewController = controller
+        mainWindow = statusWindow
+        defer { mainWindow = nil }
+        publishToolStatus(ToolStatusSnapshot(snapshot: .empty))
+        guard controller.rootView.model.toolUpdates.isEmpty, outdatedToolCount == 0 else {
+            print("Menu refresh did not update the existing window")
+            return false
+        }
+
         setDoctorStatus(count: 1)
         guard statusOutlineColor == .systemOrange else { return false }
         setDoctorStatus(count: 0)

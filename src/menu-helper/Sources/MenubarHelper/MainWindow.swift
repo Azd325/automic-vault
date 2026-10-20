@@ -122,12 +122,13 @@ enum BlessedScriptReviewOutcome: Sendable {
 final class AutomicVaultMainWindowController: NSHostingController<DashboardRootView> {
     private let model = DashboardModel()
 
-    init(checkForUpdates: @escaping () -> Void, requestScan: @escaping () -> Void) {
+    init(toolStatus: ToolStatusSnapshot? = nil, checkForUpdates: @escaping () -> Void, requestScan: @escaping () -> Void) {
         super.init(rootView: DashboardRootView(
             model: model,
             checkForUpdates: checkForUpdates,
             requestScan: requestScan
         ))
+        if let toolStatus { model.updateToolStatus(toolStatus) }
     }
 
     @MainActor @preconcurrency required dynamic init?(coder: NSCoder) {
@@ -145,6 +146,10 @@ final class AutomicVaultMainWindowController: NSHostingController<DashboardRootV
 
     func reload() {
         model.reload()
+    }
+
+    func updateToolStatus(_ status: ToolStatusSnapshot) {
+        model.updateToolStatus(status)
     }
 
     func reloadAccessRequests() {
@@ -349,6 +354,7 @@ final class DashboardModel: ObservableObject {
     @Published private var accessRequestsReloadTask: Task<Void, Never>?
     private var accessRequestsReloadPending = false
     private var historyDashboard: AuthorizationHistoryDashboard?
+    private var toolStatusGeneration = 0
     private var accessRequestsGeneration = 0
     @Published private(set) var historyOlderPageCursor: Int64?
     @Published private(set) var isLoadingOlderHistory = false
@@ -1040,6 +1046,12 @@ final class DashboardModel: ObservableObject {
         Array(snapshot.accessRequests.prefix(50))
     }
 
+    func updateToolStatus(_ status: ToolStatusSnapshot) {
+        toolStatusGeneration += 1
+        status.apply(to: &snapshot)
+        normalizeSelection()
+    }
+
     func reload() {
         guard reloadTask == nil else {
             reloadPending = true
@@ -1048,6 +1060,7 @@ final class DashboardModel: ObservableObject {
         accessRequestsGeneration += 1
         isLoadingOlderHistory = false
         let generation = accessRequestsGeneration
+        let toolGeneration = toolStatusGeneration
         reloadPending = false
         isReloading = true
         reloadTask = Task {
@@ -1079,6 +1092,10 @@ final class DashboardModel: ObservableObject {
             }
             next.accessRequests = generation == accessRequestsGeneration
                 ? (page?.records ?? []) : snapshot.accessRequests
+            // A menu refresh may have published newer Tool status while this load was suspended.
+            if toolGeneration != toolStatusGeneration {
+                ToolStatusSnapshot(snapshot: snapshot).apply(to: &next)
+            }
             snapshot = next
             lastHardeningRefresh = Date()
             if generation == accessRequestsGeneration {
