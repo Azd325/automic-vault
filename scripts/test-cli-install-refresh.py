@@ -23,6 +23,7 @@ fixture = r"""
 import Foundation
 import Synchronization
 
+let dashboardDidReload = Notification.Name("AutomicVaultDashboardDidReload")
 let loads = Mutex((count: 0, active: 0, peak: 0))
 
 let (snapshotStarted, started) = AsyncStream<Void>.makeStream()
