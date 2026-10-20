@@ -469,9 +469,12 @@ enables no helper associations. Runtime
 verification binds the live helper to the on-disk executable, validates the app
 executable, and by default validates the exact helper as a required, unaltered
 member of the app's resource seal.
-Live helper executable verification uses fresh macOS dynamic code validation
+Live helper executable verification uses fresh macOS code-signing validation
 and compares the validated live CDHash with the selected file's signature
-metadata, without an additional full helper-executable scan. PID version and
+metadata, without an additional full helper-executable scan. Standalone
+executables use descriptor-based signature validation bound to fresh kernel
+status, CDHash, and loaded-slice evidence, avoiding parent-directory bundle
+discovery. Bundle paths retain ordinary dynamic validation. PID version and
 process identity must remain unchanged across discovery and parent validation;
 unavailable execution-generation evidence denies helper attribution. A second
 fresh validation rechecks the live identity and selected file after parent
@@ -480,7 +483,8 @@ rejects damaged signed pages when the process accesses them; unread bytes can
 fail static validation while the live process remains valid. This narrower live
 integrity guarantee does not replace parent resource-seal membership, parent
 executable checks, Launcher Bundle enrollment, or pre-execution Target checks.
-See [ADR 0066](adr/0066-live-helper-executable-validation.md).
+See [ADR 0066](adr/0066-live-helper-executable-validation.md) and
+[ADR 0074](adr/0074-standalone-live-signing-without-bundle-discovery.md).
 When a helper also has its own nested app identity, the nested app and parent
 association checks run concurrently and both finish before resolution returns.
 All validation and final process-identity checks remain mandatory; no result is

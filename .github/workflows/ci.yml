@@ -49,6 +49,9 @@ jobs:
       - name: Test menu helper executable boundaries
         run: scripts/test-menu-helper-self-checks.sh
 
+      - name: Test live signing without directory discovery
+        run: python3 scripts/test-live-signing-directory-scan.py
+
       - name: Test Launcher Bundle runner
         run: scripts/test-launcher-bundle-runner.sh
 

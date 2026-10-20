@@ -2,6 +2,11 @@
 
 Status: accepted
 
+Standalone verification is refined by
+[ADR 0074](0074-standalone-live-signing-without-bundle-discovery.md); its fresh
+kernel evidence and descriptor-based signature validation preserve the
+live-execution integrity boundary described here.
+
 Repeated full executable scans add latency to every Authorization Request from
 a Verified Launcher Helper. For an already-running helper, use fresh
 `SecCodeCheckValidity` and macOS signed-page enforcement, then compare its

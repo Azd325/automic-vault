@@ -331,6 +331,18 @@ AVProcessSigningStatus av_process_signing_status(pid_t pid) {
     return category == category_none ? AV_PROCESS_SIGNING_UNTRUSTED : AV_PROCESS_SIGNING_CANDIDATE;
 }
 
+bool av_process_signing_evidence(pid_t pid, AVProcessSigningEvidence *out) {
+    if (pid <= 0 || out == NULL) return false;
+    memset(out, 0, sizeof(*out));
+    const uint32_t valid = 0x00000001, signed_code = 0x20000000;
+    // CS_OPS_STATUS, CS_OPS_CDHASH, CS_OPS_PIDOFFSET (Darwin codesign.h).
+    return csops(pid, 0, &out->flags, sizeof(out->flags)) == 0
+        && csops(pid, 5, out->cdhash, sizeof(out->cdhash)) == 0
+        && csops(pid, 6, &out->offset, sizeof(out->offset)) == 0
+        && out->offset >= 0 && out->offset <= INT32_MAX // Security's slice attribute is an int.
+        && (out->flags & (signed_code | valid)) == (signed_code | valid);
+}
+
 bool av_process_signing_identifier(pid_t pid, char *out, size_t out_len) {
     const unsigned int identity_operation = 11;
     struct { uint32_t header[2]; char identifier[1024]; } blob = {0};

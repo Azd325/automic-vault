@@ -44,3 +44,11 @@ AVProcessSigningStatus av_process_signing_status(pid_t pid);
 
 // Kernel signing identifier for rejecting reserved identities, never for granting authority.
 bool av_process_signing_identifier(pid_t pid, char *out, size_t out_len);
+
+// Fresh kernel evidence; callers must validate the signature and bind the execution.
+typedef struct {
+    uint32_t flags;
+    int64_t offset;
+    uint8_t cdhash[20];
+} AVProcessSigningEvidence;
+bool av_process_signing_evidence(pid_t pid, AVProcessSigningEvidence *out);
