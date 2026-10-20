@@ -12665,7 +12665,9 @@ private func launcherIdentities(
     if let signing = liveSigning(pid) {
         launchers = launcherIdentities(pid: pid, path: path, signing: signing)
     } else {
-        guard let signing = executableSigning(path) else { return [] }
+        // A failed standalone live check cannot be repaired by inspecting its path.
+        guard !appBundleURLs(containing: path).isEmpty,
+              let signing = executableSigning(path) else { return [] }
         // A path may now name a replacement binary, so it cannot prove the running process is standalone.
         launchers = launcherIdentities(
             pid: pid, path: path, signing: signing, allowsStandaloneFallback: false
@@ -12962,27 +12964,9 @@ private func kernelSigningIdentifier(pid: pid_t) -> String? {
 
 private func liveSigningInfo(pid: pid_t) -> LiveSigningInfo? {
     guard processSigningInspectionAllowed(pid: pid) else { return nil }
-    var code: SecCode?
-    let attributes = [kSecGuestAttributePid as String: NSNumber(value: pid)] as CFDictionary
-    guard SecCodeCopyGuestWithAttributes(nil, attributes, [], &code) == errSecSuccess,
-          let code
-    else {
-        return nil
-    }
-    guard SecCodeCheckValidity(code, [], nil) == errSecSuccess else { return nil }
-
-    var info: CFDictionary?
-    let flags = SecCSFlags(
-        rawValue: kSecCSSigningInformation | kSecCSRequirementInformation | kSecCSDynamicInformation
-    )
-    // The C API accepts live SecCode objects despite importing as SecStaticCode in Swift.
-    let inspectableCode = unsafeBitCast(code, to: SecStaticCode.self)
-    guard SecCodeCopySigningInformation(inspectableCode, flags, &info) == errSecSuccess,
-          let dictionary = info as? [CFString: Any],
-          let requirementValue = dictionary[kSecCodeInfoDesignatedRequirement]
-    else {
-        return nil
-    }
+    guard let live = liveProcessSigningInformation(pid: pid, requirement: developerIDRequirement),
+          let requirementValue = live.information[kSecCodeInfoDesignatedRequirement] else { return nil }
+    let dictionary = live.information
     let requirement = requirementValue as! SecRequirement
     guard let requirementText = requirementString(requirement) else { return nil }
 
@@ -12995,50 +12979,19 @@ private func liveSigningInfo(pid: pid_t) -> LiveSigningInfo? {
         mainExecutable: executable,
         isAdHoc: signatureFlags & secCodeSignatureAdHoc != 0,
         runtimeProtection: runtimeProtection(dictionary),
-        isDeveloperID: satisfiesDeveloperIDRequirement {
-            SecCodeCheckValidity(code, [], $0)
-        }
+        isDeveloperID: live.matchesRequirement
     )
 }
 
 private func liveProcessHasNoEntitlements(pid: pid_t) -> Bool {
-    guard processSigningInspectionAllowed(pid: pid) else { return false }
-    var code: SecCode?
-    let attributes = [kSecGuestAttributePid as String: NSNumber(value: pid)] as CFDictionary
-    guard SecCodeCopyGuestWithAttributes(nil, attributes, [], &code) == errSecSuccess,
-          let code,
-          SecCodeCheckValidity(code, [], nil) == errSecSuccess
-    else { return false }
-    var info: CFDictionary?
-    let inspectableCode = unsafeBitCast(code, to: SecStaticCode.self)
-    guard SecCodeCopySigningInformation(
-        inspectableCode,
-        SecCSFlags(rawValue: kSecCSSigningInformation | kSecCSDynamicInformation),
-        &info
-    ) == errSecSuccess,
-        let dictionary = info as? [CFString: Any]
-    else { return false }
-    return (dictionary[kSecCodeInfoEntitlementsDict] as? [String: Any] ?? [:]).isEmpty
+    guard processSigningInspectionAllowed(pid: pid),
+          let live = liveProcessSigningInformation(pid: pid) else { return false }
+    return (live.information[kSecCodeInfoEntitlementsDict] as? [String: Any] ?? [:]).isEmpty
 }
 
 private func liveCodeIdentity(pid: pid_t) -> Data? {
     guard processSigningInspectionAllowed(pid: pid) else { return nil }
-    var code: SecCode?
-    let attributes = [kSecGuestAttributePid as String: NSNumber(value: pid)] as CFDictionary
-    guard SecCodeCopyGuestWithAttributes(nil, attributes, [], &code) == errSecSuccess,
-          let code,
-          SecCodeCheckValidity(code, [], nil) == errSecSuccess
-    else { return nil }
-
-    var staticCode: SecStaticCode?
-    guard SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess,
-          let staticCode
-    else { return nil }
-    var info: CFDictionary?
-    guard SecCodeCopySigningInformation(staticCode, [], &info) == errSecSuccess,
-          let dictionary = info as? [CFString: Any]
-    else { return nil }
-    return dictionary[kSecCodeInfoUnique] as? Data
+    return liveProcessSigningInformation(pid: pid)?.information[kSecCodeInfoUnique] as? Data
 }
 
 private func executableSigningInfo(path: String) -> LiveSigningInfo? {
@@ -13124,7 +13077,8 @@ private func launcherAppVerificationFailure(
                 pid = ancestor.ppid
                 continue
             }
-            if let signing = liveSigningInfo(pid: pid) ?? executableSigningInfo(path: path) {
+            if let signing = liveSigningInfo(pid: pid)
+                ?? (appBundleURLs(containing: path).isEmpty ? nil : executableSigningInfo(path: path)) {
                 let containingAppURLs = (
                     appBundleURLs(containing: path)
                     + appBundleURLs(containing: signing.mainExecutable)
@@ -18269,6 +18223,78 @@ private func runDescendantOverrideSelfCheck() -> Bool {
     return true
 }
 
+// Used by test-live-signing-directory-scan.py under a directory-enumeration observer.
+private func runLiveSigningSelfCheck() -> Int32 {
+    let arguments = CommandLine.arguments
+    guard (5...6).contains(arguments.count), let pid = pid_t(arguments[2]) else { return 1 }
+    let path = arguments[3]
+    let appURL = URL(fileURLWithPath: arguments[4])
+    var identity = AVProcessIdentity()
+    if arguments.last == "invalid" {
+        guard av_process_identity(pid, &identity), pathString(identity) == path else {
+            fputs("Invalid fixture lost its live alias path: \(pathString(identity))\n", stderr)
+            return 1
+        }
+        guard av_process_signing_status(pid) == AV_PROCESS_SIGNING_CANDIDATE else {
+            fputs("Invalid fixture is no longer a kernel signing candidate\n", stderr)
+            return 1
+        }
+        let checks = [
+            ("signing", liveSigningInfo(pid: pid) == nil),
+            ("code identity", liveCodeIdentity(pid: pid) == nil),
+            ("entitlements", !liveProcessHasNoEntitlements(pid: pid)),
+            ("Launcher", launcherIdentities(pid: pid, identity: identity).isEmpty),
+            ("retained execution", retainedProcessExecution(pid: pid, identity: identity) == nil),
+        ]
+        for (name, passed) in checks where !passed {
+            fputs("Invalid standalone fixture passed \(name) verification\n", stderr)
+        }
+        guard checks.allSatisfy({ $0.1 }) else { return 1 }
+        var peer = AVProcessIdentity()
+        peer.ppid = pid
+        _ = launcherBundleIntegrityError(for: peer)
+        _ = launcherAppVerificationFailure(for: peer)
+        print("invalid live signing call sites passed")
+        return 0
+    }
+    guard av_process_identity(pid, &identity), pathString(identity) == path,
+          let signing = liveSigningInfo(pid: pid), signing.isDeveloperID,
+          signing.mainExecutable == path, signing.runtimeProtection == .hardened,
+          liveProcessHasNoEntitlements(pid: pid),
+          let codeIdentity = liveCodeIdentity(pid: pid),
+          liveExecutableCodeIdentity(pid: pid, executableURL: URL(fileURLWithPath: path)) == codeIdentity,
+          let app = staticSigningInfo(url: appURL),
+          app.identifier == "com.automicvault.scan.parent",
+          signing.identifier == "com.automicvault.scan.helper",
+          signing.teamIdentifier == app.teamIdentifier,
+          launcherIdentities(pid: pid, identity: identity).contains(where: { $0.isStandalone }),
+          retainedProcessExecution(pid: pid, identity: identity) != nil
+    else { fputs("Live signing fixture or standalone validation failed\n", stderr); return 1 }
+    let helper = VerifiedLauncherHelper(
+        id: "scan-fixture", name: "Fixture", appName: "Fixture",
+        appBundleIdentifier: app.identifier, appTeamIdentifier: app.teamIdentifier,
+        helperSigningIdentifier: signing.identifier, helperTeamIdentifier: signing.teamIdentifier
+    )
+    let configuration = VerifiedLauncherHelperConfiguration(
+        userApprovedHelpers: [helper], allowedOutsideBundleHelperIDs: [helper.id]
+    )
+    let launchers = launcherIdentities(
+        pid: pid, path: path, signing: signing, helperConfiguration: configuration,
+        installedAppURL: { $0 == app.identifier ? appURL : nil }
+    )
+    guard launchers.first?.verifiedHelper == helper,
+          launchers.first?.designatedRequirement == app.designatedRequirement
+    else { fputs("Live helper attribution failed\n", stderr); return 1 }
+    var peer = AVProcessIdentity()
+    peer.ppid = pid
+    guard launcherBundleIntegrityError(for: peer) == nil,
+          retainedProcessChains(for: peer).first?.first?.execution != nil
+    else { fputs("Live ancestor checks failed\n", stderr); return 1 }
+    _ = launcherAppVerificationFailure(for: peer)
+    print("live signing call sites passed")
+    return 0
+}
+
 private func runUntrustedAncestorSigningSelfCheck() -> Bool {
     let root = FileManager.default.temporaryDirectory.resolvingSymlinksInPath()
         .appendingPathComponent("av-signing-prefilter-\(UUID().uuidString)")
@@ -18348,7 +18374,7 @@ private func runLauncherSigningPrefilterSelfCheck() -> Bool {
                 || (status == AV_PROCESS_SIGNING_UNTRUSTED && isApp)
             guard result.isEmpty,
                   liveCalls == (shouldInspect ? 1 : 0),
-                  staticCalls == (shouldInspect ? 1 : 0) else {
+                  staticCalls == (shouldInspect && isApp ? 1 : 0) else {
                 fputs("Launcher prefilter entered an unexpected signing lookup\n", stderr)
                 return false
             }
@@ -20669,6 +20695,9 @@ if CommandLine.arguments.contains("--self-check-approval-process-execution") {
 
 if CommandLine.arguments.contains("--self-check-standalone-launchers") {
     exit(runStandaloneLauncherSelfCheck())
+}
+if CommandLine.arguments.contains("--self-check-live-signing") {
+    exit(runLiveSigningSelfCheck())
 }
 
 if CommandLine.arguments.contains("--self-check-secret-mutations") {

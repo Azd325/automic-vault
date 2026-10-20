@@ -21,6 +21,7 @@ let package = Package(
         .target(
             name: "MenubarHelperCore",
             dependencies: [
+                "CProcessInfo",
                 "CSQLite",
                 .product(name: "GraphQL", package: "GraphQL"),
             ]

@@ -7,12 +7,12 @@ import Testing
 private struct LiveValidationFixture {
     let root: URL
     let app: URL
-    let executable: URL
+    private(set) var executable: URL
     let process = Process()
     let input = Pipe()
     let output = Pipe()
 
-    init(helper: Bool = false) throws {
+    init(helper: Bool = false, hardLink: Bool = false, entitlements: [String: Bool] = [:]) throws {
         root = FileManager.default.temporaryDirectory.appendingPathComponent("av-live-validation-\(UUID().uuidString)")
         app = root.appendingPathComponent("Probe.app")
         executable = app.appendingPathComponent(helper ? "Contents/Helpers/Probe" : "Contents/MacOS/Probe")
@@ -22,6 +22,7 @@ private struct LiveValidationFixture {
             try Data("""
             #include <stdio.h>
             #include <unistd.h>
+            extern int csops(pid_t, unsigned int, void *, size_t);
             __attribute__((section("__TEXT,__avprobe")))
             const volatile unsigned char payload[32 * 1024 * 1024] = "AV_LIVE_VALIDATION_PAYLOAD";
             int main(void) {
@@ -31,6 +32,7 @@ private struct LiveValidationFixture {
                 while ((c = getchar()) != EOF) {
                     if (c == 't') printf("%u\\n", payload[24 * 1024 * 1024]);
                     if (c == 'e') { execl("/bin/sleep", "sleep", "30", NULL); return 2; }
+                    if (c == 'i') printf("%d\\n", csops(getpid(), 1, NULL, 0));
                 }
                 return 0;
             }
@@ -40,13 +42,23 @@ private struct LiveValidationFixture {
             try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
                 .write(to: app.appendingPathComponent("Contents/Info.plist"))
             let identity = ProcessInfo.processInfo.environment["AV_TEST_SIGNING_IDENTITY"] ?? "-"
+            let entitlementsURL = root.appendingPathComponent("entitlements.plist")
+            try PropertyListSerialization.data(fromPropertyList: entitlements, format: .xml, options: 0)
+                .write(to: entitlementsURL)
+            let signingArguments = entitlements.isEmpty ? [] : ["--entitlements", entitlementsURL.path]
             if helper {
                 let main = app.appendingPathComponent("Contents/MacOS/Probe")
                 try FileManager.default.createDirectory(at: main.deletingLastPathComponent(), withIntermediateDirectories: true)
                 try FileManager.default.copyItem(at: URL(fileURLWithPath: "/usr/bin/true"), to: main)
-                try Self.run("/usr/bin/codesign", ["--force", "--sign", identity, "--timestamp=none", "--options", "runtime", "--identifier", "com.automicvault.live-validation.helper", executable.path])
+                try Self.run("/usr/bin/codesign", ["--force", "--sign", identity, "--timestamp=none", "--options", "runtime", "--identifier", "com.automicvault.live-validation.helper"] + signingArguments + [executable.path])
             }
             try Self.run("/usr/bin/codesign", ["--force", "--sign", identity, "--timestamp=none", "--options", "runtime", app.path])
+            if hardLink {
+                let alias = root.appendingPathComponent(".links/hash")
+                try FileManager.default.createDirectory(at: alias.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try FileManager.default.linkItem(at: executable, to: alias)
+                executable = alias
+            }
             process.executableURL = executable
             process.standardInput = input
             process.standardOutput = output
@@ -127,8 +139,9 @@ private struct LiveValidationFixture {
     #expect(fixture.identity() == nil)
 }
 
-@Test func liveExecutableReliesOnKernelForUnreadPageIntegrity() throws {
-    let fixture = try LiveValidationFixture()
+@Test(arguments: [false, true])
+func liveExecutableReliesOnKernelForUnreadPageIntegrity(standalone: Bool) throws {
+    let fixture = try LiveValidationFixture(helper: standalone, hardLink: standalone)
     defer { fixture.cleanup() }
     let original = try #require(fixture.identity())
     let bytes = try Data(contentsOf: fixture.executable)
@@ -180,5 +193,134 @@ private struct LiveValidationFixture {
     defer { fixture.cleanup() }
     try #require(fixture.identity() != nil)
     try Data("corrupt".utf8).write(to: fixture.app.appendingPathComponent("Contents/Info.plist"))
+    #expect(fixture.identity() == nil)
+}
+
+@Test func liveExecutableHardLinkRejectsReplacementAndExec() throws {
+    // A nested executable has its own signature, independent of the parent app's Info.plist.
+    let fixture = try LiveValidationFixture(helper: true, hardLink: true)
+    defer { fixture.cleanup() }
+    let original = try #require(fixture.identity())
+    let saved = fixture.root.appendingPathComponent("saved")
+    try FileManager.default.moveItem(at: fixture.executable, to: saved)
+    #expect(fixture.identity() == nil)
+    try FileManager.default.copyItem(at: URL(fileURLWithPath: "/bin/sleep"), to: fixture.executable)
+    #expect(fixture.identity() == nil)
+    try FileManager.default.removeItem(at: fixture.executable)
+    try FileManager.default.moveItem(at: saved, to: fixture.executable)
+    #expect(fixture.identity() == original)
+    try fixture.input.fileHandleForWriting.write(contentsOf: Data("e".utf8))
+    // Wait for the kernel to report the replacement execution, not for a guessed delay.
+    var path = [CChar](repeating: 0, count: 4096)
+    for _ in 0..<100 {
+        if proc_pidpath(fixture.process.processIdentifier, &path, UInt32(path.count)) > 0,
+           String(cString: path) == "/bin/sleep" { break }
+        usleep(10_000)
+    }
+    try #require(String(cString: path) == "/bin/sleep")
+    #expect(fixture.identity() == nil)
+}
+
+@Test func liveExecutableRejectsNonregularFilesAndInvalidPIDs() throws {
+    let fixture = try LiveValidationFixture()
+    defer { fixture.cleanup() }
+    for pid: pid_t in [-1, 0, Int32.max] {
+        #expect(liveExecutableCodeIdentity(pid: pid, executableURL: fixture.executable) == nil)
+    }
+    let fifo = fixture.root.appendingPathComponent("fifo")
+    try #require(mkfifo(fifo.path, 0o600) == 0)
+    for url in [fixture.root, fifo, URL(fileURLWithPath: "/dev/null")] {
+        #expect(liveExecutableCodeIdentity(pid: fixture.process.processIdentifier, executableURL: url) == nil)
+    }
+}
+
+@Test(arguments: [false, true])
+func freshLiveSigningPreservesIdentityAndRequirements(helper: Bool) throws {
+    let fixture = try LiveValidationFixture(helper: helper, hardLink: helper)
+    defer { fixture.cleanup() }
+    var ordinary: SecCode?
+    try #require(SecCodeCopyGuestWithAttributes(nil,
+        [kSecGuestAttributePid as String: NSNumber(value: fixture.process.processIdentifier)] as CFDictionary,
+        [], &ordinary) == errSecSuccess)
+    let baseline = try #require(ordinary)
+    let flags = SecCSFlags(rawValue: kSecCSSigningInformation | kSecCSRequirementInformation | kSecCSDynamicInformation)
+    func information(_ code: SecCode) throws -> NSDictionary {
+        try #require(SecCodeCheckValidity(code, [], nil) == errSecSuccess)
+        var info: CFDictionary?
+        try #require(SecCodeCopySigningInformation(unsafeBitCast(code, to: SecStaticCode.self), flags, &info) == errSecSuccess)
+        return try #require(info) as NSDictionary
+    }
+    let expected = try information(baseline)
+    let live = try #require(liveProcessSigningInformation(pid: fixture.process.processIdentifier))
+    let actual = live.information as NSDictionary
+    for key in [kSecCodeInfoUnique, kSecCodeInfoIdentifier, kSecCodeInfoTeamIdentifier,
+                kSecCodeInfoFlags, kSecCodeInfoMainExecutable, kSecCodeInfoEntitlementsDict] {
+        #expect(NSDictionary(dictionary: [key as String: actual[key] ?? NSNull()])
+            .isEqual(to: [key as String: expected[key] ?? NSNull()]))
+    }
+    let requirement = try #require(expected[kSecCodeInfoDesignatedRequirement]) as! SecRequirement
+    #expect(liveProcessSigningInformation(pid: fixture.process.processIdentifier, requirement: requirement)?.matchesRequirement == true)
+    var wrong: SecRequirement?
+    try #require(SecRequirementCreateWithString("identifier com.example.wrong" as CFString, [], &wrong) == errSecSuccess)
+    let wrongRequirement = try #require(wrong)
+    #expect(liveProcessSigningInformation(pid: fixture.process.processIdentifier, requirement: wrongRequirement)?.matchesRequirement == false)
+}
+
+@Test(arguments: [
+    "com.apple.security.cs.disable-library-validation",
+    "com.apple.security.cs.allow-dyld-environment-variables",
+])
+func liveStandaloneSigningPreservesRuntimeExceptions(entitlement: String) throws {
+    let fixture = try LiveValidationFixture(helper: true, hardLink: true, entitlements: [entitlement: true])
+    defer { fixture.cleanup() }
+    let live = try #require(liveProcessSigningInformation(pid: fixture.process.processIdentifier))
+    let entitlements = try #require(live.information[kSecCodeInfoEntitlementsDict] as? [String: Any])
+    #expect(entitlements[entitlement] as? Bool == true)
+    let posture = launcherRuntimeProtection(signingInformation: live.information)
+    if entitlement == "com.apple.security.cs.disable-library-validation" {
+        #expect(posture == .hardenedWithLibraryValidationDisabled)
+    } else {
+        #expect(!posture.allowsSecretGateAccess)
+    }
+}
+
+@Test func liveStandaloneSigningBindsAppleUniversalSlice() throws {
+    let child = Process()
+    child.executableURL = URL(fileURLWithPath: "/bin/sleep")
+    child.arguments = ["30"]
+    try child.run()
+    defer { child.terminate(); child.waitUntilExit() }
+    var requirement: SecRequirement?
+    try #require(SecRequirementCreateWithString("identifier com.apple.sleep and anchor apple" as CFString, [], &requirement) == errSecSuccess)
+    let live = try #require(liveProcessSigningInformation(pid: child.processIdentifier, requirement: try #require(requirement)))
+    #expect(live.matchesRequirement)
+    #expect(launcherRuntimeProtection(signingInformation: live.information) == .hardened)
+    #expect(liveExecutableCodeIdentity(pid: child.processIdentifier, executableURL: child.executableURL!) != nil)
+}
+
+@Test func liveStandaloneRejectsCorruptedEntitlementSeal() throws {
+    let entitlement = "com.apple.security.cs.disable-library-validation"
+    let fixture = try LiveValidationFixture(helper: true, hardLink: true, entitlements: [entitlement: true])
+    defer { fixture.cleanup() }
+    try #require(fixture.identity() != nil)
+    let bytes = try Data(contentsOf: fixture.executable)
+    let marker = try #require(bytes.range(of: Data(entitlement.utf8)))
+    let file = try FileHandle(forWritingTo: fixture.executable)
+    try file.seek(toOffset: UInt64(marker.lowerBound))
+    try file.write(contentsOf: Data("x".utf8))
+    try file.close()
+    #expect(liveProcessSigningInformation(pid: fixture.process.processIdentifier) == nil)
+    #expect(fixture.identity() == nil)
+}
+
+@Test func liveStandaloneRejectsInvalidatedKernelSignature() throws {
+    let fixture = try LiveValidationFixture(helper: true, hardLink: true)
+    defer { fixture.cleanup() }
+    try #require(fixture.identity() != nil)
+    try fixture.input.fileHandleForWriting.write(contentsOf: Data("i".utf8))
+    let response = try fixture.response()
+    // A CS_KILL process may die immediately when it invalidates its signature.
+    try #require(response == "0" || response == "")
+    #expect(liveProcessSigningInformation(pid: fixture.process.processIdentifier) == nil)
     #expect(fixture.identity() == nil)
 }
