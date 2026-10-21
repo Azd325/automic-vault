@@ -1160,7 +1160,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private var statusOutlineColor: NSColor? {
-        if fullScanFailed || !failedScanDetectors.isEmpty || !latestDetectorFindings.isEmpty {
+        if fullScanFailed || !failedScanDetectors.isEmpty
+            || scanAlertLevel(latestDetectorFindings.map(\.severity)) == .high {
             return .systemRed
         }
         return doctorReportCount > 0 || outdatedToolCount > 0 ? .systemOrange : nil
@@ -1756,13 +1757,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setDoctorStatus(count: 0)
         setOutdatedToolsStatus(count: 1)
         guard statusOutlineColor == .systemOrange else { return false }
-        for severity in ["medium", "high"] {
+        for severity in ["medium", "mid", "high", "unknown"] {
             let data = Data("{\"source\":\"self-check\",\"severity\":\"\(severity)\"}".utf8)
             guard let finding = try? JSONDecoder().decode(DetectorFinding.self, from: data) else { return false }
             latestDetectorFindings = [finding]
             NotificationCenter.default.post(name: dashboardDidReload,
                                             object: DashboardModel(snapshot: .empty))
-            guard statusOutlineColor == .systemRed else { return false }
+            let expected: NSColor? = matchesMediumSeverity(severity) ? nil : .systemRed
+            guard statusOutlineColor == expected else {
+                print("Detector severity \(severity) changed the menu bar alert level")
+                return false
+            }
+            setOutdatedToolsStatus(count: 1)
+            guard statusOutlineColor == (expected ?? .systemOrange) else { return false }
+            setOutdatedToolsStatus(count: 0)
+            setDoctorStatus(count: 1)
+            guard statusOutlineColor == (expected ?? .systemOrange) else { return false }
+            setDoctorStatus(count: 0)
         }
         latestDetectorFindings.removeAll()
         fullScanFailed = true
