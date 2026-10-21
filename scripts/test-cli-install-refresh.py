@@ -18,6 +18,9 @@ reload_method, reload_boundary, _ = model_source.split(
     "    func reload() {", 1
 )[1].partition("    fileprivate func reloadAuthorizationState()")
 assert reload_boundary, "DashboardModel reload extraction boundary not found"
+update_tool_status = "    func updateToolStatus(" + model_source.split(
+    "    func updateToolStatus(", 1
+)[1].split("    func reload() {", 1)[0]
 
 fixture = r"""
 import Foundation
@@ -63,6 +66,7 @@ enum DashboardSection { case secretUsage }
 
 struct DashboardSnapshot: Sendable {
     var policy = "loaded"
+    var toolStatus = "loaded"
     var accessRequests = [String]()
     var detectorFindings = ["preserved"]
     static func load() -> Self {
@@ -75,6 +79,12 @@ struct DashboardSnapshot: Sendable {
         started.yield(())
         finishSnapshot.wait()
         return Self(detectorFindings: [])
+    }
+}
+struct ToolStatusSnapshot {
+    let snapshot: DashboardSnapshot
+    func apply(to target: inout DashboardSnapshot) {
+        target.toolStatus = snapshot.toolStatus
     }
 }
 enum CLIInstallState { case current, outdated }
@@ -110,6 +120,7 @@ func loadAccessRequestRecordsPage(beforeSequence: Int64? = nil) -> Authorization
     var accessRequestsReloadPending = false
     var historyDashboard: AuthorizationHistoryDashboard?
     var accessRequestsGeneration = 0
+    var toolStatusGeneration = 0
     var historyOlderPageCursor: Int64?
     var isLoadingOlderHistory = false
     var historyLoadFailed = false
@@ -146,7 +157,7 @@ func loadAccessRequestRecordsPage(beforeSequence: Int64? = nil) -> Authorization
         for record in records { historyRecordsByID[record.id] = record }
     }
     func invalidateForTest() { invalidateReload() }
-""" + show_method + pending_status + r"""
+""" + show_method + pending_status + update_tool_status + r"""
     func reload() {
 """ + reload_method + """
 }
@@ -166,10 +177,12 @@ guard model.cliInstallState == .current, model.isReloading else {
     exit(1)
 }
 let first = model.reloadTask!
+model.updateToolStatus(ToolStatusSnapshot(snapshot: DashboardSnapshot(toolStatus: "newer")))
 for _ in 0..<100 { model.reload() }
 assert(!first.isCancelled, "refresh must not cancel a usable result")
 finishSnapshot.signal()
 await first.value
+assert(model.snapshot.toolStatus == "newer", "stale full reload overwrote newer Tool status")
 assert(model.hasLoadedInitialSnapshot && model.lastHardeningRefresh != nil)
 assert(model.overviewHistory == ["latest"])
 assert(model.snapshot.accessRequests.count == 50 && model.snapshot.accessRequests.first == "latest")
@@ -181,6 +194,7 @@ for await _ in snapshotStarted { break }
 let second = model.reloadTask!
 finishSnapshot.signal()
 await second.value
+assert(model.snapshot.toolStatus == "loaded", "fresh full reload did not update Tool status")
 assert(!model.isReloading)
 assert(model.snapshot.detectorFindings == ["preserved"])
 assert(loads.withLock { $0.count == 2 && $0.peak == 1 })
