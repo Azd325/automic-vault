@@ -7873,7 +7873,7 @@ private struct GatePolicyTable: View {
                         Menu {
                             launcherActions(for: app)
                         } label: {
-                            Text(Image(systemName: "gearshape"))
+                            Image(systemName: "gearshape")
                         }
                         .menuStyle(.button)
                         .buttonStyle(.bordered)
