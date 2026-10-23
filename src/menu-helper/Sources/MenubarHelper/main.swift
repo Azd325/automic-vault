@@ -14741,6 +14741,7 @@ private struct ApprovalPromptView: View {
             if usesTouchIDApproval {
                 HStack(alignment: .top, spacing: 12) {
                     denyButton
+                        .frame(maxWidth: 110)
                     approvalInfoButton
                         .padding(.top, 4)
                     if usesEmbeddedTouchID {
@@ -14757,8 +14758,10 @@ private struct ApprovalPromptView: View {
                                     .frame(width: 16, height: 16)
                                 }
                                 Text(isAuthenticatingWithTouchID ? "Waiting for Touch ID…" : "Approve with Touch ID")
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.7)
                             }
-                            .padding(.horizontal, 16)
+                            .padding(.horizontal, 12)
                             .frame(maxWidth: .infinity, minHeight: 32)
                             .allowsHitTesting(false)
                             .accessibilityElement(children: .contain)
