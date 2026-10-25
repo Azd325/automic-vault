@@ -7766,7 +7766,7 @@ private final class ApprovalServer: @unchecked Sendable {
                         peer,
                         to: message,
                         ok: false,
-                        error: "failed to store secret \(account): \(status)"
+                        error: secretMutationFailureMessage(action: "store", account: account, status: status)
                     )
                 }
             case .delete(let account), .dockerDelete(let account, _),
@@ -7785,7 +7785,7 @@ private final class ApprovalServer: @unchecked Sendable {
                         peer,
                         to: message,
                         ok: false,
-                        error: "failed to delete secret \(account): \(status)"
+                        error: secretMutationFailureMessage(action: "delete", account: account, status: status)
                     )
                 }
             case .deleteValue, .rename, .setAccessibility:

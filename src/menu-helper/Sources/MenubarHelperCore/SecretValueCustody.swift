@@ -36,6 +36,20 @@ public enum SecretValueCustodyError: Error, Equatable, LocalizedError, Sendable 
     }
 }
 
+/// Describes a failed Secret mutation for the Gate Client. `errSecInteractionNotAllowed`
+/// also arrives on an unlocked Mac when the Data Protection Keychain's key material is
+/// unavailable, so name that case instead of returning a bare status code.
+public func secretMutationFailureMessage(action: String, account: String, status: OSStatus) -> String {
+    let prefix = "failed to \(action) secret \(account):"
+    if status == errSecInteractionNotAllowed {
+        return "\(prefix) the Keychain is unavailable (\(status), errSecInteractionNotAllowed). Approval was recorded, but the Keychain refused the operation. This happens while the Mac is locked, and occasionally on an unlocked Mac when Keychain key material is unavailable. Unlock the Mac and retry; if it is already unlocked, quit and reopen Automic Vault, or log out and back in, then retry."
+    }
+    guard let description = SecCopyErrorMessageString(status, nil) as String? else {
+        return "\(prefix) \(status)"
+    }
+    return "\(prefix) \(description) (\(status))"
+}
+
 public struct SelectedSecretValues: Equatable, Sendable {
     private let values: [String: StoredSecretValue]
 
