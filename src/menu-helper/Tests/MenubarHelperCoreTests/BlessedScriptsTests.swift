@@ -70,14 +70,14 @@ func blessedScriptManifestParsesInlineCapabilityModes(
         target: "/usr/bin/python3",
         replaceExistingEnv: false,
         allowMissingKeys: false,
-        snapshotIncompatibleInterpreter: nil
+        snapshotIncompatibleInterpreter: "/usr/bin/python3"
     ))
     #expect(!declaration.matchesExecution(
         keys: ["TOKEN"],
         target: "/usr/bin/python3",
         replaceExistingEnv: false,
         allowMissingKeys: false,
-        snapshotIncompatibleInterpreter: nil
+        snapshotIncompatibleInterpreter: "/usr/bin/python3"
     ))
 }
 
@@ -90,6 +90,36 @@ func blessedScriptManifestParsesInlineCapabilityModes(
     let declaration = try blessedScriptDeclaration(data: data)
 
     #expect(declaration.snapshotIncompatibleInterpreter == "uv")
+    #expect(declaration.snapshotCompatibilityWarning?.contains("before uv opens it") == true)
+}
+
+@Test(arguments: [
+    ("/usr/bin/python3 -I", "/usr/bin/python3"),
+    ("/usr/bin/env /usr/bin/python3 -I", "/usr/bin/python3"),
+    ("/opt/homebrew/bin/python3 -I", nil),
+    ("/usr/local/bin/python3 -I", nil),
+    ("/tmp/python3 -I", nil),
+    ("/usr/bin/env python3 -I", nil),
+] as [(String, String?)])
+func blessedScriptSystemPythonException(command: String, expected: String?) throws {
+    let declaration = try blessedScriptDeclaration(data: Data("#!/usr/local/bin/av inject +TOKEN \(command)\nprint('ok')\n".utf8))
+    #expect(declaration.snapshotIncompatibleInterpreter == expected)
+    #expect(declaration.matchesExecution(
+        keys: ["TOKEN"], target: declaration.target, replaceExistingEnv: false,
+        allowMissingKeys: false, snapshotIncompatibleInterpreter: expected
+    ))
+    if let expected {
+        let warning = try #require(declaration.snapshotCompatibilityWarning)
+        #expect(warning.contains("Another process can change the file before \(expected) opens it"))
+        #expect(warning.contains("then run its canonical path"))
+        #expect(warning.contains("warn on every run"))
+        #expect(!declaration.matchesExecution(
+            keys: ["TOKEN"], target: declaration.target, replaceExistingEnv: false,
+            allowMissingKeys: false, snapshotIncompatibleInterpreter: nil
+        ))
+    } else {
+        #expect(declaration.snapshotCompatibilityWarning == nil)
+    }
 }
 
 @Test func blessedScriptCanDeclareCapabilitiesWithoutSecrets() throws {
@@ -187,7 +217,8 @@ func blessedScriptManifestParsesInlineCapabilityModes(
     #expect(!script.matchesBlessing(path: "/tmp/script", checksum: "changed"))
 }
 
-@Test func canonicalPathExecutionRequiresAnExplicitBlessingOverride() {
+@Test(arguments: ["uv", "/usr/bin/python3"])
+func canonicalPathExecutionRequiresAnExplicitBlessingOverride(interpreter: String) {
     let strict = BlessedScript(
         path: "/tmp/script",
         checksum: "checksum",
@@ -211,8 +242,8 @@ func blessedScriptManifestParsesInlineCapabilityModes(
     )
 
     #expect(strict.allowsExecution(snapshotIncompatibleInterpreter: nil))
-    #expect(!strict.allowsExecution(snapshotIncompatibleInterpreter: "uv"))
-    #expect(overridden.allowsExecution(snapshotIncompatibleInterpreter: "uv"))
+    #expect(!strict.allowsExecution(snapshotIncompatibleInterpreter: interpreter))
+    #expect(overridden.allowsExecution(snapshotIncompatibleInterpreter: interpreter))
 }
 
 @Test func existingBlessingsRetainCapabilityInheritanceWithoutCanonicalPathExecution() throws {
@@ -221,6 +252,7 @@ func blessedScriptManifestParsesInlineCapabilityModes(
     let script = try JSONDecoder().decode(BlessedScript.self, from: data)
 
     #expect(!script.allowsExecution(snapshotIncompatibleInterpreter: "uv"))
+    #expect(!script.allowsExecution(snapshotIncompatibleInterpreter: "/usr/bin/python3"))
     #expect(script.reviewedContents == nil)
     #expect(script.usesCapabilityInheritance)
 }

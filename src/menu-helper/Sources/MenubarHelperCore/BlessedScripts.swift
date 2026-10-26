@@ -326,6 +326,11 @@ public struct BlessedScriptDeclaration: Equatable, Sendable {
     public let snapshotIncompatibleInterpreter: String?
     public let manifest: BlessedScriptManifest
 
+    public var snapshotCompatibilityWarning: String? {
+        guard let interpreter = snapshotIncompatibleInterpreter else { return nil }
+        return "\(interpreter) cannot execute Automic Vault’s verified script snapshot. If you continue, Automic Vault will verify the script, then run its canonical path. Another process can change the file before \(interpreter) opens it. Automic Vault will warn on every run."
+    }
+
     public func matchesExecution(
         keys: [String],
         target: String,
@@ -421,9 +426,12 @@ private func parseInjectShebang(
 }
 
 private func snapshotIncompatibleInterpreter(in command: [String]) -> String? {
-    command.lazy
-        .map { URL(fileURLWithPath: $0).lastPathComponent }
-        .first { $0 == "uv" }
+    // Match the CLI's static compatibility list without running interpreter code.
+    for argument in command {
+        if argument == "/usr/bin/python3" { return argument }
+        if URL(fileURLWithPath: argument).lastPathComponent == "uv" { return "uv" }
+    }
+    return nil
 }
 
 private func validBlessedSecretKey(_ key: String) -> Bool {

@@ -125,6 +125,101 @@ fn av_inject_uses_the_script_path_for_uv_and_preserves_stdin() {
 }
 
 #[test]
+fn av_inject_system_python_preserves_streams_status_and_warns_on_every_run() {
+    if !std::path::Path::new("/usr/bin/python3").exists() {
+        eprintln!("skipping: system Python is not installed");
+        return;
+    }
+    let home = temp_home("inject-system-python");
+    let keychain = home.join("keychain");
+    fs::create_dir_all(&keychain).unwrap();
+    let script = home.join("tool");
+    let input = home.join("input");
+    fs::write(&input, "CALLER_STDIN\n").unwrap();
+    for target in ["/usr/bin/python3", "/usr/bin/env /usr/bin/python3"] {
+        fs::write(&script, format!(
+            "#!{} inject +SOME_SECRET {target} -I\nimport os, sys\nprint('STDOUT_MARKER')\nprint(sys.stdin.read(), end='')\nprint(os.environ['SOME_SECRET'])\nprint(sys.argv[0])\nprint('STDERR_MARKER', file=sys.stderr)\nsys.exit(3)\n",
+            env!("CARGO_BIN_EXE_av")
+        )).unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        for _ in 0..2 {
+            let output = Command::new(&script)
+                .env("HOME", &home)
+                .env("AUTOMIC_VAULT_TEST_KEYCHAIN_DIR", &keychain)
+                .env("SOME_SECRET", "expected")
+                .stdin(fs::File::open(&input).unwrap())
+                .output()
+                .unwrap();
+            if unsafe { libc::geteuid() } == 0 {
+                assert!(!output.status.success());
+                return;
+            }
+            assert_eq!(output.status.code(), Some(3), "{}", stderr(&output));
+            assert_eq!(
+                stdout(&output),
+                format!(
+                    "STDOUT_MARKER\nCALLER_STDIN\nexpected\n{}\n",
+                    script.canonicalize().unwrap().display()
+                )
+            );
+            assert!(stderr(&output).contains("STDERR_MARKER"));
+            assert!(stderr(&output).contains(
+                "warning: /usr/bin/python3 cannot execute the verified /dev/fd snapshot"
+            ));
+            assert!(stderr(&output).contains("Blessing created with this exception"));
+            assert!(stderr(&output).contains(
+                "another process can change the script between verification and execution"
+            ));
+        }
+    }
+    fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn av_inject_other_python_keeps_snapshot_and_never_probes() {
+    let home = temp_home("inject-other-python");
+    let keychain = home.join("keychain");
+    fs::create_dir_all(&keychain).unwrap();
+    let python = home.join("python3");
+    let invocations = home.join("invocations");
+    fs::write(
+        &python,
+        format!(
+            "#!/bin/sh\nprintf 'called\\n' >> '{}'\nprintf '%s\\n' \"$*\"\n",
+            invocations.display()
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&python, fs::Permissions::from_mode(0o755)).unwrap();
+    let script = home.join("tool");
+    fs::write(
+        &script,
+        format!(
+            "#!{} inject +SOME_SECRET {} -I\nprint('ok')\n",
+            env!("CARGO_BIN_EXE_av"),
+            python.display()
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+    let output = Command::new(&script)
+        .env("HOME", &home)
+        .env("AUTOMIC_VAULT_TEST_KEYCHAIN_DIR", &keychain)
+        .env("SOME_SECRET", "expected")
+        .output()
+        .unwrap();
+    if unsafe { libc::geteuid() } == 0 {
+        assert!(!output.status.success());
+        return;
+    }
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(stdout(&output).starts_with("-I /dev/fd/"));
+    assert!(!stderr(&output).contains("canonical script path"));
+    assert_eq!(fs::read_to_string(invocations).unwrap(), "called\n");
+    fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
 fn av_inject_preserves_existing_env_without_replace() {
     let home = temp_home("inject-existing");
     let keychain = home.join("keychain");

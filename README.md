@@ -391,6 +391,12 @@ Authorization Gates for long-running processes.
 FD delivery currently requires fresh Approval, including when invoked inside a
 Blessed Script. FD mode in an `av inject` shebang is unsupported.
 
+Apple's `/usr/bin/python3`, like `uv`, uses the canonical script path because
+its Python 3.9.6 build cannot execute the verified `/dev/fd` snapshot. Review the
+race warning and choose **Bless Anyway** to permit this exception; existing
+Blessings require review again. Automic Vault warns on every run. Other Python
+paths keep snapshot execution; use a fixed Python build there.
+
 <img src="./docs/img/blessed-script.png" alt="Automic Vault Blessed Script review" style="width: 589px; height: auto" />
 
 [Blessings and execution guarantees](docs/domain-language.md#blessed-script) ·
