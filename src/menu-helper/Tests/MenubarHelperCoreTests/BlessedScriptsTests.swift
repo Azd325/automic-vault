@@ -90,6 +90,7 @@ func blessedScriptManifestParsesInlineCapabilityModes(
     let declaration = try blessedScriptDeclaration(data: data)
 
     #expect(declaration.snapshotIncompatibleInterpreter == "uv")
+    #expect(declaration.snapshotCompatibilityWarning?.contains("before uv opens it") == true)
 }
 
 @Test(arguments: [
@@ -107,11 +108,17 @@ func blessedScriptSystemPythonException(command: String, expected: String?) thro
         keys: ["TOKEN"], target: declaration.target, replaceExistingEnv: false,
         allowMissingKeys: false, snapshotIncompatibleInterpreter: expected
     ))
-    if expected != nil {
+    if let expected {
+        let warning = try #require(declaration.snapshotCompatibilityWarning)
+        #expect(warning.contains("Another process can change the file before \(expected) opens it"))
+        #expect(warning.contains("then run its canonical path"))
+        #expect(warning.contains("warn on every run"))
         #expect(!declaration.matchesExecution(
             keys: ["TOKEN"], target: declaration.target, replaceExistingEnv: false,
             allowMissingKeys: false, snapshotIncompatibleInterpreter: nil
         ))
+    } else {
+        #expect(declaration.snapshotCompatibilityWarning == nil)
     }
 }
 

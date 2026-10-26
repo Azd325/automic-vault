@@ -5705,10 +5705,10 @@ private struct BlessedScriptReviewView: View {
                             text: String(localized: "This script requests access to operations that may reveal protected secret values.")
                         )
                     }
-                    if let interpreter = request.declaration.snapshotIncompatibleInterpreter {
+                    if let warning = request.declaration.snapshotCompatibilityWarning {
                         InfoBlock(
                             title: "Verified Snapshot Unavailable",
-                            text: "\(interpreter) cannot execute Automic Vault’s verified script snapshot. If you continue, Automic Vault will verify the script, then run its canonical path. Another process can change the file before \(interpreter) opens it. Automic Vault will warn on every run."
+                            text: warning
                         )
                     }
                     if let error = model.errorMessage {

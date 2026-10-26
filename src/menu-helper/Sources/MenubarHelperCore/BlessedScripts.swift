@@ -326,6 +326,11 @@ public struct BlessedScriptDeclaration: Equatable, Sendable {
     public let snapshotIncompatibleInterpreter: String?
     public let manifest: BlessedScriptManifest
 
+    public var snapshotCompatibilityWarning: String? {
+        guard let interpreter = snapshotIncompatibleInterpreter else { return nil }
+        return "\(interpreter) cannot execute Automic Vault’s verified script snapshot. If you continue, Automic Vault will verify the script, then run its canonical path. Another process can change the file before \(interpreter) opens it. Automic Vault will warn on every run."
+    }
+
     public func matchesExecution(
         keys: [String],
         target: String,

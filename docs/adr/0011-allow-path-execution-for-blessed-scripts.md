@@ -43,7 +43,7 @@ offset while probing a `/dev/fd/N` script as a ZIP archive, then executes an emp
 script and exits successfully. This reproduces without Automic Vault:
 
 ```sh
-printf 'raise SystemExit(3)\n' > /tmp/av-python-snapshot.py
+printf 'print("STDOUT_MARKER")\nraise SystemExit(3)\n' > /tmp/av-python-snapshot.py
 /usr/bin/python3 -I /dev/fd/9 9</tmp/av-python-snapshot.py  # exits 0 on 3.9.6
 /usr/bin/python3 -I /tmp/av-python-snapshot.py             # exits 3
 ```
