@@ -9155,7 +9155,7 @@ private struct DashboardOverviewView: View {
                 }
                 ForEach(news.prefix(2)) { post in
                     Link(destination: post.url) {
-                        Text(post.title + " ↗").font(.callout).foregroundStyle(Color.accentColor)
+                        Text(post.title + "\u{00A0}↗").font(.callout).foregroundStyle(Color.accentColor)
                             .multilineTextAlignment(.leading).lineLimit(nil)
                             .fixedSize(horizontal: false, vertical: true)
                     }
