@@ -155,7 +155,11 @@ Unlock the Mac for login or credential changes that fail with Keychain error
 `-25308`. Saving Secrets requires a complete inventory, which may be unavailable
 while locked even when a particular Secret allows use while locked. Some app
 versions also report an unavailable GitHub Secret as an "invalid token"; retry
-while unlocked before treating this as an expired or revoked GitHub token.
+while unlocked before treating this as an expired or revoked GitHub token. The
+same error can appear on an unlocked Mac when the Keychain's key material is
+unavailable; quitting and reopening Automic Vault, or logging out and back in,
+restores it. Approval may already have been recorded in Authorization History
+even though the Secret was not stored.
 
 See the canonical [Secret Availability](domain-language.md#secret-availability)
 definition for the storage and authorization boundaries.

@@ -244,3 +244,26 @@ func unavailableSecretExplainsAvailabilitySetting(error: SecretValueCustodyError
         _ = try custody.load(selected, names: ["ABSENT_TOKEN"])
     }
 }
+
+@Test func secretMutationFailureMessageNamesUnavailableKeychain() {
+    let message = secretMutationFailureMessage(
+        action: "store",
+        account: "FM_VAULT_PROBE",
+        status: errSecInteractionNotAllowed
+    )
+
+    #expect(message.hasPrefix("failed to store secret FM_VAULT_PROBE: the Keychain is unavailable (-25308, errSecInteractionNotAllowed)."))
+    #expect(message.contains("quit and reopen Automic Vault"))
+}
+
+@Test func secretMutationFailureMessageKeepsStatusCodeForOtherErrors() {
+    let message = secretMutationFailureMessage(
+        action: "delete",
+        account: "GH_TOKEN",
+        status: errSecItemNotFound
+    )
+
+    #expect(message.hasPrefix("failed to delete secret GH_TOKEN: "))
+    #expect(message.contains("(-25300)"))
+    #expect(message.contains("could not be found"))
+}
