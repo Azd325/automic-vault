@@ -838,6 +838,25 @@ func authorizationHistoryReadRejectsInvalidSequenceBoundaries(sequence: Int64) t
     #expect(throws: AuthorizationHistoryStoreError.verificationFailed) { try fixture.store.records() }
 }
 
+@Test(.enabled(if: ProcessInfo.processInfo.environment["AV_HISTORY_BENCHMARK"] == "1"))
+func authorizationHistoryMaintenanceBenchmark() throws {
+    let fixture = try HistoryStoreFixture(maximumEncryptedBytes: 64 * 1024 * 1024)
+    defer { fixture.remove() }
+    let date = Date(timeIntervalSince1970: 3_999_900)
+    try fixture.store.importRecords((0..<16_273).map {
+        fixture.record(index: $0, date: date, reason: String(repeating: "x", count: 1_800))
+    })
+    for _ in 0..<3 {
+        let start = clock()
+        try fixture.store.maintain()
+        let seconds = Double(clock() - start) / Double(CLOCKS_PER_SEC)
+        print("History maintenance: 16273 rows, \(seconds) CPU seconds")
+        if let budget = ProcessInfo.processInfo.environment["AV_HISTORY_CPU_BUDGET"].flatMap(Double.init) {
+            #expect(seconds < budget)
+        }
+    }
+}
+
 private final class HistoryStoreFixture {
     let directory: URL
     let url: URL
