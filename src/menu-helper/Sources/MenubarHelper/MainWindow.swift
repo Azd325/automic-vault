@@ -5735,7 +5735,8 @@ private struct BlessedScriptReviewView: View {
             }
             .padding(16)
         }
-        .frame(width: 720, height: request.previousContents == nil ? 520 : 680)
+        .frame(width: 720, height: request.previousContents != nil ? 680
+            : request.declaration.snapshotCompatibilityWarning != nil ? 640 : 520)
         .background(Color(nsColor: .windowBackgroundColor))
     }
 }
