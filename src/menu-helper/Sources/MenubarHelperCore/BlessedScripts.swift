@@ -421,9 +421,12 @@ private func parseInjectShebang(
 }
 
 private func snapshotIncompatibleInterpreter(in command: [String]) -> String? {
-    command.lazy
-        .map { URL(fileURLWithPath: $0).lastPathComponent }
-        .first { $0 == "uv" }
+    // Match the CLI's static compatibility list without running interpreter code.
+    for argument in command {
+        if argument == "/usr/bin/python3" { return argument }
+        if URL(fileURLWithPath: argument).lastPathComponent == "uv" { return "uv" }
+    }
+    return nil
 }
 
 private func validBlessedSecretKey(_ key: String) -> Bool {

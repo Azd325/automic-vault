@@ -17164,6 +17164,7 @@ private func runApprovalSelfCheck() -> Int32 {
 
     func scriptRequest(
         _ source: String,
+        target: String = "/opt/homebrew/bin/python3",
         keys: [String] = [],
         op: String = "inject",
         snapshotIncompatibleInterpreter: String? = nil
@@ -17171,7 +17172,7 @@ private func runApprovalSelfCheck() -> Int32 {
         ApprovalRequest(
             op: op,
             keys: keys,
-            target: "/usr/bin/python3",
+            target: target,
             args: ["/tmp/script"],
             cwd: "/tmp",
             replaceExistingEnv: false,
@@ -17186,29 +17187,35 @@ private func runApprovalSelfCheck() -> Int32 {
         )
     }
     let inheritedScript = scriptStartingWithoutApproval(for: scriptRequest(
-        "#!/usr/local/bin/av inject -- /usr/bin/python3\nprint('ok')\n"
+        "#!/usr/local/bin/av inject -- /opt/homebrew/bin/python3\nprint('ok')\n"
     ))
     let explicitlyInheritedScript = scriptStartingWithoutApproval(for: scriptRequest("""
-    #!/usr/local/bin/av inject -- /usr/bin/python3
+    #!/usr/local/bin/av inject -- /opt/homebrew/bin/python3
     # --- automic-vault
     # capabilities: { inherit: true }
     # ---
     print("ok")
     """))
     let emptyCeilingSource = """
-    #!/usr/local/bin/av inject -- /usr/bin/python3
+    #!/usr/local/bin/av inject -- /opt/homebrew/bin/python3
     # --- automic-vault
     # capabilities: {}
     # ---
     print("ok")
     """
+    let systemPythonRequest = scriptRequest(
+        emptyCeilingSource.replacingOccurrences(of: "/opt/homebrew/bin/python3", with: "/usr/bin/python3"),
+        target: "/usr/bin/python3", snapshotIncompatibleInterpreter: "/usr/bin/python3"
+    )
+    guard scriptExecutionDeclaration(for: systemPythonRequest) != nil,
+          scriptStartingWithoutApproval(for: systemPythonRequest) == nil else { return 1 }
     let emptyCeilingScript = scriptStartingWithoutApproval(for: scriptRequest(emptyCeilingSource))
     guard inheritedScript == nil,
           explicitlyInheritedScript == nil,
           emptyCeilingScript?.manifest.hasEmptyCapabilityCeiling == true,
           scriptStartingWithoutApproval(for: scriptRequest(emptyCeilingSource, op: "authorize")) == nil,
           scriptStartingWithoutApproval(for: scriptRequest(
-              emptyCeilingSource, snapshotIncompatibleInterpreter: "/usr/bin/python3"
+              emptyCeilingSource, snapshotIncompatibleInterpreter: "/opt/homebrew/bin/python3"
           )) == nil,
           scriptStartingWithoutApproval(for: scriptRequest(
               emptyCeilingSource.replacingOccurrences(of: "inject --", with: "inject +TOKEN --"),

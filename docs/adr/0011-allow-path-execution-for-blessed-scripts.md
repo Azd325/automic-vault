@@ -34,3 +34,30 @@ verified `/dev/fd/N` snapshot.
   snapshot normally removes.
 - Adding an interpreter to the compatibility list requires a reproduction that
   demonstrates snapshot execution cannot work and tests for both warnings.
+
+## System Python compatibility (2026-10-26)
+
+The compatibility list also recognizes the explicit `/usr/bin/python3` argument,
+including behind `/usr/bin/env`. Apple's Python 3.9.6 advances the shared file
+offset while probing a `/dev/fd/N` script as a ZIP archive, then executes an empty
+script and exits successfully. This reproduces without Automic Vault:
+
+```sh
+printf 'raise SystemExit(3)\n' > /tmp/av-python-snapshot.py
+/usr/bin/python3 -I /dev/fd/9 9</tmp/av-python-snapshot.py  # exits 0 on 3.9.6
+/usr/bin/python3 -I /tmp/av-python-snapshot.py             # exits 3
+```
+
+See [CPython #87235](https://github.com/python/cpython/issues/87235) and
+[the upstream fix](https://github.com/python/cpython/pull/99768).
+The CLI and blessing review recognize the same literal path without executing
+an interpreter or its arguments before Approval. Bare `python3` resolved through
+PATH, aliases, and other installations are not added to the exception. Fixed
+Python installations at other paths retain verified-snapshot execution.
+
+This reuses the existing explicit override, including re-review of old
+Blessings and warnings during blessing and every execution. It grants no new
+authority without that review. The static system-path entry remains an explicit
+exception if Apple replaces its Python with a fixed build; removing that entry
+can restore snapshots without broadening authority. Supporting other affected
+installations requires a separately reviewed compatibility-list change.

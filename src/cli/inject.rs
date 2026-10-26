@@ -518,8 +518,13 @@ fn secretless_environment(
 fn path_script_interpreter(target: &Path, args_before_script: &[OsString]) -> Option<&'static str> {
     std::iter::once(target.as_os_str())
         .chain(args_before_script.iter().map(OsString::as_os_str))
-        .filter_map(|arg| Path::new(arg).file_name()?.to_str())
-        .find_map(|name| {
+        .find_map(|arg| {
+            // Keep this static list aligned with BlessedScripts.swift: blessing
+            // review must see the same exception without executing the interpreter.
+            if arg == "/usr/bin/python3" {
+                return Some("/usr/bin/python3");
+            }
+            let name = Path::new(arg).file_name()?.to_str()?;
             PATH_SCRIPT_INTERPRETERS
                 .iter()
                 .copied()
@@ -2093,6 +2098,30 @@ mod tests {
         );
         assert_eq!(
             path_script_interpreter(Path::new("/opt/homebrew/bin/python3"), &[]),
+            None
+        );
+    }
+
+    #[test]
+    fn only_explicit_system_python_uses_the_canonical_script_path() {
+        assert_eq!(
+            path_script_interpreter(Path::new("/usr/bin/python3"), &[]),
+            Some("/usr/bin/python3")
+        );
+        assert_eq!(
+            path_script_interpreter(Path::new("/usr/bin/env"), &os(&["/usr/bin/python3", "-I"])),
+            Some("/usr/bin/python3")
+        );
+        for target in [
+            "/opt/homebrew/bin/python3",
+            "/usr/local/bin/python3",
+            "python3",
+            "/tmp/python3",
+        ] {
+            assert_eq!(path_script_interpreter(Path::new(target), &[]), None);
+        }
+        assert_eq!(
+            path_script_interpreter(Path::new("/usr/bin/env"), &os(&["python3", "-I"])),
             None
         );
     }
