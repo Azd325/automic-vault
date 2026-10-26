@@ -5706,9 +5706,9 @@ private struct BlessedScriptReviewView: View {
                         )
                     }
                     if let warning = request.declaration.snapshotCompatibilityWarning {
-                        InfoBlock(
+                        SecurityWarningBlock(
                             title: "Verified Snapshot Unavailable",
-                            text: warning
+                            text: Text(warning)
                         )
                     }
                     if let error = model.errorMessage {
@@ -5765,6 +5765,23 @@ private struct LauncherHelperOutlineView<Row: View>: View {
     }
 }
 
+private struct SecurityWarningBlock: View {
+    let title: LocalizedStringKey
+    let text: Text
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label(title, systemImage: "exclamationmark.triangle.fill")
+                .font(.headline)
+                .foregroundStyle(.orange)
+            text
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(14)
+        .background(.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
 private struct LauncherHelperReviewView: View {
     @ObservedObject var model: DashboardModel
     private let initialReview: LauncherHelperReview
@@ -5812,18 +5829,13 @@ private struct LauncherHelperReviewView: View {
                             InfoBlock(title: "Runtime warning", text: warning)
                         }
                         Text("Helpers").font(.title2.weight(.semibold))
-                        VStack(alignment: .leading, spacing: 8) {
-                            Label("This may widen Secret access", systemImage: "exclamationmark.triangle.fill")
-                                .font(.headline)
-                                .foregroundStyle(.orange)
-                            Text("Each selected helper will represent \(appName) at every Authorization Gate "
+                        SecurityWarningBlock(
+                            title: "This may widen Secret access",
+                            text: Text("Each selected helper will represent \(appName) at every Authorization Gate "
                                 + "where that app has a current or future Launcher-specific rule. It may apply "
                                 + "protected Secrets or perform controlled operations up to that rule’s Access "
                                 + "Level. Select it only if you trust the helper to act as the app.")
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        .padding(14)
-                        .background(.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+                        )
                         if model.isDiscoveringLauncherHelpers {
                             ProgressView("Inspecting app for signed helpers…")
                                 .accessibilityIdentifier("launcher-review-discovery-progress")
