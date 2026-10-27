@@ -42,6 +42,7 @@ mod docker_credential_helper;
 mod docker_machine;
 mod doctl;
 mod dropbox_uploader;
+pub(crate) mod emudhra;
 mod envchain;
 mod fastlane;
 mod fastly;
@@ -285,6 +286,7 @@ const DETECTORS: &[Detector] = &[
     detector!(docker_machine),
     detector!(doctl),
     detector!(dropbox_uploader),
+    detector!(emudhra),
     detector!(envchain),
     detector!(fastlane),
     detector!(fastly),
@@ -627,7 +629,7 @@ mod tests {
 
     #[test]
     fn scan_runs_every_registered_isotope() {
-        assert_eq!(DETECTORS.len(), 159);
+        assert_eq!(DETECTORS.len(), 160);
     }
 
     #[test]

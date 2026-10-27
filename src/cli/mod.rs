@@ -552,10 +552,16 @@ where
                 let result = hardeners::codex::run(&mut stdout, yes);
                 return finish_hardening(result, "codex", &mut stdout, stderr);
             }
-            if target == "sudo" {
-                return match hardeners::sudo::run(&mut stdout, false) {
+            if target == "sudo" || target == "emudhra" {
+                let name = target.to_str().unwrap();
+                let result = if name == "sudo" {
+                    hardeners::sudo::run(&mut stdout, false)
+                } else {
+                    hardeners::emudhra::run(&mut stdout, false)
+                };
+                return match result {
                     Ok(hardeners::RootOnlyOutcome::Hardened) => {
-                        print_hardening_followup(&mut stdout, "sudo");
+                        print_hardening_followup(&mut stdout, name);
                         0
                     }
                     Ok(hardeners::RootOnlyOutcome::Previewed) => 1,
@@ -1001,6 +1007,32 @@ mod tests {
             "╭─ harden sudo\n│\n├─ enable biometric authentication for sudo\n╰─ next: sudo av harden sudo\n"
         );
         assert_eq!(stderr, "");
+    }
+
+    #[test]
+    fn harden_emudhra_previews_the_privileged_step() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let path = std::env::temp_dir().join(format!("av-cli-emudhra-{}", std::process::id()));
+        let input = concat!(
+            include_str!("../isotopes/detectors/emudhra/testdata/unaffected.pem"),
+            include_str!("../isotopes/detectors/emudhra/testdata/emsign.pem")
+        );
+        std::fs::write(&path, input).unwrap();
+        unsafe {
+            std::env::set_var("AUTOMIC_VAULT_TEST_EMUDHRA_CERT_PATH", &path);
+            std::env::set_var("AUTOMIC_VAULT_TEST_EUID", "501");
+        }
+        let (code, stdout, stderr) = run_args(&["av", "harden", "emudhra"]);
+        unsafe {
+            std::env::remove_var("AUTOMIC_VAULT_TEST_EMUDHRA_CERT_PATH");
+            std::env::remove_var("AUTOMIC_VAULT_TEST_EUID");
+        }
+        let unchanged = std::fs::read_to_string(&path).unwrap();
+        std::fs::remove_file(path).unwrap();
+        assert_eq!(code, 1);
+        assert!(stdout.contains("sudo av harden emudhra"));
+        assert_eq!(stderr, "");
+        assert_eq!(unchanged, input);
     }
 
     #[test]
