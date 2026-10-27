@@ -18,7 +18,9 @@ check; this Hardener creates no Authorization Gate.
 ## Caveats
 
 - Removing both roots also blocks legitimate sites that depend on them.
-- This covers tools using `/etc/ssl/cert.pem`, not private CA bundles or all TLS clients.
+- This Hardener covers only `/etc/ssl/cert.pem`. The Detector also reports common
+  Homebrew CA bundles and installed runtime binaries; update those through their
+  package or version manager. The Hardener does not modify them.
 - A macOS update can restore the roots. Scan the bundle again after updating.
 - The backup retains the old trust roots; restoring it restores those trust paths.
 

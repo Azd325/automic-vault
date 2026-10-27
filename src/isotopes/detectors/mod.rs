@@ -722,6 +722,7 @@ mod tests {
             periodic,
             HashSet::from([
                 "cloudflare-wrangler",
+                "emudhra",
                 "gh-cli-keychain-access",
                 "git-credential-fill",
                 "macOS",

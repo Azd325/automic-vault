@@ -1,3 +1,5 @@
+mod sources;
+
 use base64::Engine;
 use std::io::Write;
 use std::path::PathBuf;
@@ -99,7 +101,13 @@ fn insecurity_reasons() -> Result<Vec<String>, String> {
 }
 
 pub(crate) fn findings(home: &std::path::Path) -> Vec<crate::Finding> {
-    super::radioisotope::findings("emudhra", insecurity_reasons, home)
+    let mut findings = super::radioisotope::findings("emudhra", insecurity_reasons, home);
+    if cfg!(target_os = "macos")
+        && crate::test_env_var("AUTOMIC_VAULT_TEST_EMUDHRA_CERT_PATH").is_none()
+    {
+        findings.extend(sources::findings(home));
+    }
+    findings
 }
 
 #[cfg(test)]

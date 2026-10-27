@@ -177,6 +177,7 @@ dependencies = [
  "hyper-rustls",
  "hyper-util",
  "libc",
+ "memchr",
  "percent-encoding",
  "pgp",
  "rand 0.8.7",

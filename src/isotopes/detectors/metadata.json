@@ -1120,9 +1120,15 @@
     "solution": "Run `av harden stripe`."
   },
   "emudhra": {
-    "watch_paths": ["/etc/ssl/cert.pem"],
-    "requires_periodic_scan": false,
-    "solution": "Run `av harden emudhra`."
+    "watch_paths": [
+      "/etc/ssl/cert.pem",
+      "/opt/homebrew/etc/ca-certificates/cert.pem",
+      "/opt/homebrew/etc/openssl*/cert.pem",
+      "/usr/local/etc/ca-certificates/cert.pem",
+      "/usr/local/etc/openssl*/cert.pem"
+    ],
+    "requires_periodic_scan": true,
+    "solution": "For /etc/ssl/cert.pem, run `av harden emudhra`. For other reported paths, update the owning CA package or runtime with its package/version manager, remove obsolete installations, and scan again. Automic Vault does not modify these packages; updating a CA package does not update roots embedded in a runtime."
   },
   "sudo": {
     "watch_paths": [
