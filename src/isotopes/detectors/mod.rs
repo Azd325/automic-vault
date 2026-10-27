@@ -764,6 +764,14 @@ mod tests {
             ("sip", vec!["macOS Recovery", "csrutil enable", "restart"]),
             ("codex", vec!["ChatGPT desktop app", "sign-in again"]),
             (
+                "emudhra",
+                vec![
+                    "brew upgrade ca-certificates",
+                    "brew cleanup ca-certificates",
+                    "inactive kegs",
+                ],
+            ),
+            (
                 "uv",
                 vec!["supported plaintext HTTP Basic", "separate migration"],
             ),

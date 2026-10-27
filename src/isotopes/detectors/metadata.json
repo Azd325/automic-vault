@@ -1128,7 +1128,7 @@
       "/usr/local/etc/openssl*/cert.pem"
     ],
     "requires_periodic_scan": true,
-    "solution": "For /etc/ssl/cert.pem, run `av harden emudhra`. For other reported paths, update the owning CA package or runtime with its package/version manager, remove obsolete installations, and scan again. Automic Vault does not modify these packages; updating a CA package does not update roots embedded in a runtime."
+    "solution": "For /etc/ssl/cert.pem, run `av harden emudhra`. For Homebrew CA bundles, run `brew update`, `brew upgrade ca-certificates`, then `brew cleanup ca-certificates` to remove older inactive kegs. For other reported paths, update the owning runtime with its package/version manager and remove obsolete installations. Scan again afterward. Automic Vault does not modify these packages; updating a CA package does not update roots embedded in a runtime."
   },
   "sudo": {
     "watch_paths": [

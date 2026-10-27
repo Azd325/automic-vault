@@ -50,9 +50,11 @@ For `/etc/ssl/cert.pem`, run `av harden emudhra` to preview the change, then
 
 For every other reported path, update the owning CA package or runtime with the
 package manager or version manager that installed it. For Homebrew's CA package,
-use `brew update` followed by `brew upgrade ca-certificates`. Update the reported
-Node, Deno, or Bun installation separately: updating a CA bundle cannot replace
-roots embedded in a binary. Remove obsolete versions you no longer use, restart
+use `brew update`, then `brew upgrade ca-certificates`, then
+`brew cleanup ca-certificates`. The Detector also checks older inactive kegs;
+cleanup removes those old versions even when the active keg is already current.
+Update the reported Node, Deno, or Bun installation separately: updating a CA
+bundle cannot replace roots embedded in a binary. Remove obsolete versions you no longer use, restart
 processes that use an updated runtime, and scan again.
 
 Automic Vault does not modify these packages. A package update may retain a
